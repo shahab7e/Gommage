@@ -1,20 +1,27 @@
-"""Gommage: tiny Windows Tor client with custom bridges (webtunnel/obfs4/...), system proxy or whole-system VPN.
-Run: python gommage.py   (first run needs the Tor Expert Bundle; see ensure_tor)
+"""Gommage: tiny Tor client (Windows, Linux) with custom bridges (webtunnel/obfs4/...), system proxy or whole-system VPN.
+Run: python gommage.py   (first run needs the Tor Expert Bundle, or on Linux the system's tor; see ensure_tor)
 """
-import ctypes, glob, hashlib, io, ipaddress, json, os, re, socket, sqlite3, ssl, subprocess, sys, tarfile, threading, time
-import urllib.request, winreg, zipfile
+import ctypes, glob, hashlib, io, ipaddress, json, ntpath, os, re, shutil, signal, socket, sqlite3, ssl, subprocess, sys
+import tarfile, threading, time, urllib.request, zipfile
 from concurrent.futures import ThreadPoolExecutor
 import webview
 
+WIN = sys.platform == "win32"
+if WIN:
+    import winreg
+EXE = ".exe" if WIN else ""
 VER = "15.0.25"  # ponytail: pinned; bump when Tor ships a new bundle
-URL = f"https://dist.torproject.org/torbrowser/{VER}/tor-expert-bundle-windows-x86_64-{VER}.tar.gz"
-HOME = os.path.join(os.environ["APPDATA"], "Gommage")
-OLD_HOME = os.path.join(os.environ["APPDATA"], "TorBridge")  # the app's former name: carry its data over
-if os.path.isdir(OLD_HOME) and not os.path.exists(HOME):
-    try:
-        os.rename(OLD_HOME, HOME)
-    except OSError:
-        HOME = OLD_HOME  # old copy still running and holding files; keep using its folder, move it next launch
+URL = f"https://dist.torproject.org/torbrowser/{VER}/tor-expert-bundle-{'windows' if WIN else 'linux'}-x86_64-{VER}.tar.gz"
+if WIN:
+    HOME = os.path.join(os.environ["APPDATA"], "Gommage")
+    OLD_HOME = os.path.join(os.environ["APPDATA"], "TorBridge")  # the app's former name: carry its data over
+    if os.path.isdir(OLD_HOME) and not os.path.exists(HOME):
+        try:
+            os.rename(OLD_HOME, HOME)
+        except OSError:
+            HOME = OLD_HOME  # old copy still running and holding files; keep using its folder, move it next launch
+else:  # GOMMAGE_HOME: set by relaunch_root so the root copy keeps the user's settings
+    HOME = os.environ.get("GOMMAGE_HOME") or os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "Gommage")
 SOCKS = 9050  # defaults; overwritten from settings by apply_ports()
 HTTP = 8118  # HTTPS CONNECT proxy: browsers resolve DNS through Tor (plain SOCKS via WinINET leaks/breaks DNS)
 LISTEN = "127.0.0.1"
@@ -23,28 +30,72 @@ REG = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
 SETTINGS = os.path.join(HOME, "settings.json")
 DB = os.path.join(HOME, "history.db")
 LOG = os.path.join(HOME, "log.txt")
-NOFLASH = 0x08000000  # CREATE_NO_WINDOW
+NOFLASH = 0x08000000 if WIN else 0  # CREATE_NO_WINDOW
 COUNTRIES = {"Any": "", "Netherlands": "nl", "Germany": "de", "France": "fr", "UK": "gb", "USA": "us",
              "Canada": "ca", "Sweden": "se", "Switzerland": "ch", "Finland": "fi", "Austria": "at"}
-SINGBOX = os.path.join(HOME, "sing-box.exe")
+SINGBOX = os.path.join(HOME, "sing-box" + EXE)
 SB_VER = "1.11.15"  # ponytail: pinned; config below uses 1.11 syntax (newer majors renamed DNS fields)
+SB_FILE = f"sing-box-{SB_VER}-" + ("windows-amd64.zip" if WIN else "linux-amd64.tar.gz")  # ponytail: x86_64 only
 # Integrity pins: a download that doesn't match is never run. sing-box's comes from its GitHub release digest.
 # Tor's is from Tor Project's sha256sums-signed-build.txt for VER (fetched over Tor). Update both whenever a version is
 # bumped; if TOR_SHA256 is ever left empty the bundle is checked against that checksum list from the same server.
-SB_SHA256 = "9acbda81d7a9a93d8d0616990cf8b804523adfcd0215d11a2dd9370746d2be28"
-TOR_SHA256 = "c1988c701de2f24f7d098d1d6d7f507b58f27740d097f29c246e0524d639b252"
+SB_SHA256 = ("9acbda81d7a9a93d8d0616990cf8b804523adfcd0215d11a2dd9370746d2be28" if WIN else
+             "950af37eb2d7e55dddae34a18411cd617303fd99d2dc75bc76b6dd9fcd97d9c5")
+# ponytail: Linux bundle not pinned yet (Tor's site was unreachable when this was written); fill it from the checksum list
+TOR_SHA256 = "c1988c701de2f24f7d098d1d6d7f507b58f27740d097f29c246e0524d639b252" if WIN else ""
 APP_MODES = {"all": "All apps via Tor", "except": "All apps except the list", "only": "Only apps in the list"}
-TOR_PROCS = ["tor.exe", "lyrebird.exe", "conjure-client.exe"]  # Tor's own traffic must never loop into the tunnel
+# Tor's own traffic must never loop into the tunnel
+TOR_PROCS = ["tor.exe", "lyrebird.exe", "conjure-client.exe"] if WIN else ["tor", "lyrebird", "obfs4proxy", "conjure-client"]
 FW_RULE = "Gommage-noIPv6"
 DNS_PORT = 9053  # Tor's DNS for VPN mode; not 53, which local DNS tools (e.g. Shecan) often hold
 
 
 def kill_tree(proc):
-    run("taskkill", "/T", "/F", "/PID", str(proc.pid))
+    if WIN:
+        run("taskkill", "/T", "/F", "/PID", str(proc.pid))
+    else:  # Tor was started in its own session (see popen), so its process group is Tor + its transports
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
 
 
-def run(*cmd):
-    return subprocess.run(cmd, capture_output=True, text=True, creationflags=NOFLASH)
+def run(*cmd, input=None):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, creationflags=NOFLASH, input=input)
+    except FileNotFoundError:
+        return None  # optional tool not installed (e.g. resolvectl, nft)
+
+
+def popen(cmd, **kw):
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=NOFLASH,
+                            start_new_session=not WIN, **kw)
+
+
+def is_admin():
+    return ctypes.windll.shell32.IsUserAnAdmin() if WIN else os.geteuid() == 0
+
+
+def block_ipv6(on):
+    """Block global IPv6 (2000::/3) outbound; loopback/link-local untouched. Needs admin/root."""
+    if WIN:
+        run("netsh", "advfirewall", "firewall", "delete", "rule", f"name={FW_RULE}")
+        if on:
+            run("netsh", "advfirewall", "firewall", "add", "rule", f"name={FW_RULE}", "dir=out",
+                "action=block", "remoteip=2000::/3")
+        else:
+            run("netsh", "advfirewall", "firewall", "delete", "rule", "name=TorBridge-noIPv6")  # left by the old name
+    elif shutil.which("nft"):
+        run("nft", "delete", "table", "inet", "gommage")
+        if on:
+            run("nft", "-f", "-", input="table inet gommage { chain out { type filter hook output priority 0;"
+                                        " ip6 daddr 2000::/3 reject; } }")
+    else:
+        rule = ["OUTPUT", "-d", "2000::/3", "-m", "comment", "--comment", FW_RULE, "-j", "REJECT"]
+        while (r := run("ip6tables", "-D", *rule)) and r.returncode == 0:
+            pass
+        if on:
+            run("ip6tables", "-I", *rule)
 
 
 def db(sql, args=()):
@@ -72,6 +123,8 @@ def apply_ports(listen, socks, http):
 
 def migrate_old_name():
     """Drop the old name's autostart entry (the data folder is moved at import, above)."""
+    if not WIN:
+        return False
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
             winreg.DeleteValue(k, "TorBridge")
@@ -95,6 +148,13 @@ def load_settings():
 
 
 def set_proxy(on):
+    if not WIN:  # GNOME (and desktops that read its settings); as root it would write root's dconf, so skip
+        if shutil.which("gsettings") and os.geteuid() != 0:
+            for scheme in ("http", "https"):
+                run("gsettings", "set", f"org.gnome.system.proxy.{scheme}", "host", LOCAL)
+                run("gsettings", "set", f"org.gnome.system.proxy.{scheme}", "port", str(HTTP))
+            run("gsettings", "set", "org.gnome.system.proxy", "mode", "manual" if on else "none")
+        return
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG, 0, winreg.KEY_SET_VALUE) as k:
         winreg.SetValueEx(k, "ProxyEnable", 0, winreg.REG_DWORD, int(on))
         if on:
@@ -123,12 +183,31 @@ def tor_sha256(base, log):
         return None
 
 
+def builtin_bridges():
+    """Tor's built-in bridges {transport: [lines]}; they ship with the Expert Bundle only (not distro packages)."""
+    try:
+        return json.load(open(os.path.join(HOME, "tor", "pluggable_transports", "pt_config.json")))["bridges"]
+    except OSError:
+        return {}
+
+
+def geoip(name="geoip"):
+    """Tor's GeoIP file: the bundle's, else (Linux) the distro's tor-geoipdb."""
+    p = os.path.join(HOME, "data", name)
+    return p if WIN or os.path.exists(p) else os.path.join("/usr/share/tor", name)
+
+
 def ensure_tor(log):
-    tor = os.path.join(HOME, "tor", "tor.exe")
+    """(tor, pluggable transport): the Expert Bundle in HOME, else on Linux the system's tor + lyrebird/obfs4proxy,
+    else the bundle, from a file you downloaded or fetched here."""
+    tor = os.path.join(HOME, "tor", "tor" + EXE)
+    found = tor, os.path.join(HOME, "tor", "pluggable_transports", "lyrebird" + EXE)
     if os.path.exists(tor):
-        return tor
+        return found
+    if not WIN and shutil.which("tor") and (pt := shutil.which("lyrebird") or shutil.which("obfs4proxy")):
+        return shutil.which("tor"), pt
     # 1) a bundle already downloaded by hand (Downloads or app folder)
-    for d in (HOME, os.path.join(os.environ["USERPROFILE"], "Downloads")):
+    for d in (HOME, os.path.expanduser(os.path.join("~", "Downloads"))):
         for f in glob.glob(os.path.join(d, "**", os.path.basename(URL)), recursive=True):
             data = open(f, "rb").read()
             if TOR_SHA256:
@@ -137,7 +216,7 @@ def ensure_tor(log):
                 log(f"  {f}: no pinned hash to check against, using the file you provided")
             log(f"Using {f}")
             tarfile.open(fileobj=io.BytesIO(data)).extractall(HOME, filter="data")
-            return tor
+            return found
     # 2) download, trying mirrors
     for u in (URL, URL.replace("dist.", "archive.").replace("/torbrowser/", "/tor-package-archive/torbrowser/")):
         try:
@@ -148,7 +227,7 @@ def ensure_tor(log):
                 raise RuntimeError("couldn't verify the download")
             check_sha256(data, expect, "Tor download")
             tarfile.open(fileobj=io.BytesIO(data)).extractall(HOME, filter="data")
-            return tor
+            return found
         except Exception as e:
             log(f"  failed: {e}")
     raise RuntimeError(f"Download blocked. Get this file with any VPN/proxy/friend:\n{URL}\n"
@@ -156,18 +235,17 @@ def ensure_tor(log):
 
 
 def ensure_singbox(log):
-    """sing-box.exe (TUN + per-app routing, wintun embedded); fetched through Tor since GitHub may be filtered."""
+    """sing-box (TUN + per-app routing, wintun embedded on Windows); fetched through Tor since GitHub may be filtered."""
     if os.path.exists(SINGBOX):
         return
-    local = glob.glob(os.path.join(os.environ["USERPROFILE"], "Downloads", "**", f"sing-box-{SB_VER}-windows-amd64.zip"),
-                      recursive=True)
+    local = glob.glob(os.path.expanduser(os.path.join("~", "Downloads", "**", SB_FILE)), recursive=True)
     if local:
         log(f"Using {local[0]}")
         data = open(local[0], "rb").read()
     else:
         # api.github.com rejects most Tor exits, so the release is pinned instead of looked up
         via_tor = urllib.request.build_opener(urllib.request.ProxyHandler({"https": f"http://{LOCAL}:{HTTP}"}))
-        url = f"https://github.com/SagerNet/sing-box/releases/download/v{SB_VER}/sing-box-{SB_VER}-windows-amd64.zip"
+        url = f"https://github.com/SagerNet/sing-box/releases/download/v{SB_VER}/{SB_FILE}"
         log(f"Downloading {url}")
         r = via_tor.open(url, timeout=120)
         total, data = int(r.headers.get("Content-Length", 0)), b""
@@ -175,8 +253,13 @@ def ensure_singbox(log):
             data += chunk
             log(f"  sing-box: {len(data) // 1024} / {total // 1024} KB")
     check_sha256(data, SB_SHA256, "sing-box download")
-    z = zipfile.ZipFile(io.BytesIO(data))
-    open(SINGBOX, "wb").write(z.read(next(m for m in z.namelist() if m.endswith("sing-box.exe"))))
+    if WIN:
+        z = zipfile.ZipFile(io.BytesIO(data))
+        open(SINGBOX, "wb").write(z.read(next(m for m in z.namelist() if m.endswith("sing-box.exe"))))
+    else:
+        t = tarfile.open(fileobj=io.BytesIO(data))
+        open(SINGBOX, "wb").write(t.extractfile(next(m for m in t.getmembers() if m.name.endswith("/sing-box"))).read())
+        os.chmod(SINGBOX, 0o755)
 
 
 def clean_bridges(text):
@@ -385,6 +468,15 @@ def self_cmd():
 
 
 def set_autostart(on):
+    if not WIN:  # XDG autostart entry, read by GNOME/KDE/Xfce at login
+        f = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "autostart", "gommage.desktop")
+        if on:
+            os.makedirs(os.path.dirname(f), exist_ok=True)
+            exe, args = self_cmd()
+            open(f, "w").write(f'[Desktop Entry]\nType=Application\nName=Gommage\nExec="{exe}" {args}\n')
+        elif os.path.exists(f):
+            os.remove(f)
+        return
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
         if on:
             exe, args = self_cmd()
@@ -412,7 +504,7 @@ def split_nets(text):
 
 def app_names(text):
     """App list -> exe names (accepts full paths too), lowercase-insensitive match is done by sing-box."""
-    return [os.path.basename(l.strip()) for l in text.splitlines() if l.strip() and not l.strip().startswith("#")]
+    return [ntpath.basename(l.strip()) for l in text.splitlines() if l.strip() and not l.strip().startswith("#")]
 
 
 def country_nets(geoip, cc):
@@ -463,7 +555,7 @@ class Api:
 
     def init(self):
         a = self._app
-        return {"settings": a.s, "countries": COUNTRIES, "app_modes": APP_MODES, "log_path": LOG,
+        return {"settings": a.s, "countries": COUNTRIES, "app_modes": APP_MODES, "log_path": LOG, "windows": WIN,
                 "state": a.ui_state, "log": open(LOG, encoding="utf8", errors="replace").read()[-20000:] if os.path.exists(LOG) else ""}
 
     def set(self, key, value):
@@ -500,7 +592,7 @@ class Api:
 
     def open_log(self):
         if os.path.exists(LOG):
-            os.startfile(LOG)
+            os.startfile(LOG) if WIN else run("xdg-open", LOG)
 
     def minimize(self):
         self._app.win.minimize()
@@ -528,7 +620,8 @@ class App:
                                          js_api=Api(self), width=400, height=780, min_size=(380, 740),
                                          frameless=True, easy_drag=False, background_color="#121419")
         self.win.events.closing += self.quit_app
-        self.win.events.shown += self.round_corners
+        if WIN:
+            self.win.events.shown += self.round_corners
         self.win.events.loaded += lambda: self.s["autoconnect"] and self.after(500, self.toggle)
         threading.Thread(target=self.traffic, daemon=True).start()
 
@@ -611,10 +704,12 @@ class App:
 
     def add_builtin(self, name):
         try:
-            tor = ensure_tor(self.log)
-            cfg = json.load(open(os.path.join(os.path.dirname(tor), "pluggable_transports", "pt_config.json")))
+            ensure_tor(self.log)
+            got = builtin_bridges().get(name)
+            if not got:
+                raise RuntimeError("built-in bridges come with the Tor Expert Bundle; your system tor doesn't have them")
             cur = self.s["bridges"]
-            self.set_bridges(cur + ("\n" if cur and not cur.endswith("\n") else "") + "\n".join(cfg["bridges"][name]) + "\n")
+            self.set_bridges(cur + ("\n" if cur and not cur.endswith("\n") else "") + "\n".join(got) + "\n")
         except Exception as e:
             self.log(f"ERROR: {e}")
 
@@ -726,7 +821,7 @@ class App:
         threading.Thread(target=go, daemon=True).start()
 
     def pick_app(self):
-        paths = self.win.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True, file_types=("Programs (*.exe)",))
+        paths = self.win.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True, file_types=("Programs (*.exe)",) if WIN else ())
         cur = self.s["apps"]
         for name in (os.path.basename(p) for p in paths or ()):
             if name not in app_names(cur):
@@ -766,7 +861,9 @@ class App:
         except ValueError as e:
             self.render(f"Bad IP/port: {e}", "red")
             return
-        if (self.s["vpn"] or self.s["block_ipv6"]) and not ctypes.windll.shell32.IsUserAnAdmin():
+        if (self.s["vpn"] or self.s["block_ipv6"]) and not is_admin() and not WIN:
+            threading.Thread(target=self.relaunch_root, daemon=True).start()
+        elif (self.s["vpn"] or self.s["block_ipv6"]) and not is_admin():
             # relaunch elevated; settings were just saved so the new window has them
             if ctypes.windll.shell32.ShellExecuteW(None, "runas", *self_cmd(), None, 1) > 32:
                 self.closing = True  # the elevated copy takes over; close this one off the JS-call thread
@@ -786,13 +883,11 @@ class App:
             self.sid = db("INSERT INTO sessions(start, mode, country, status) VALUES(?,?,?,?)",
                           (now(), "VPN" if vpn else "proxy", self.s["country"], "connecting"))
             if self.s["block_ipv6"]:
-                run("netsh", "advfirewall", "firewall", "delete", "rule", f"name={FW_RULE}")
-                run("netsh", "advfirewall", "firewall", "add", "rule", f"name={FW_RULE}", "dir=out",
-                    "action=block", "remoteip=2000::/3")  # global IPv6 only; loopback/link-local untouched
+                block_ipv6(True)
                 self.log("IPv6 blocked (firewall rule)")
-            tor = ensure_tor(self.log)
-            pt = os.path.join(os.path.dirname(tor), "pluggable_transports", "lyrebird.exe")
-            builtin = json.load(open(os.path.join(os.path.dirname(pt), "pt_config.json")))["bridges"]
+            tor, pt = ensure_tor(self.log)
+            self.log(f"tor: {tor}, transports: {pt}")
+            builtin = builtin_bridges()
             # memory: the bridges that connected last time go first, before any testing
             known = set(lines).union(*builtin.values())
             good = [l for l in self.s.get("last_good", []) if l in known] if lines else []
@@ -840,8 +935,7 @@ class App:
     def run_tor(self, tor, pt, lines, vpn, cc, label):
         """Run Tor with these bridges. True once it reached 100%; False if it stalled (killed by watchdog)."""
         rc = [f"SocksPort {LISTEN}:{SOCKS}", f"HTTPTunnelPort {LISTEN}:{HTTP}", f"DataDirectory {os.path.join(HOME, 'data')}",
-              f"GeoIPFile {os.path.join(HOME, 'data', 'geoip')}",
-              f"GeoIPv6File {os.path.join(HOME, 'data', 'geoip6')}",
+              f"GeoIPFile {geoip()}", f"GeoIPv6File {geoip('geoip6')}",
               "Log notice stdout", "WarnUnsafeSocks 0", "ControlPort auto", "CookieAuthentication 1",
               f"ControlPortWriteToFile {os.path.join(HOME, 'control.port')}",
               f"ClientTransportPlugin meek_lite,obfs4,webtunnel,snowflake exec {pt}"]
@@ -854,8 +948,9 @@ class App:
         rcp = os.path.join(HOME, "torrc")
         open(rcp, "w", encoding="utf8").write("\n".join(rc) + "\n")
         self.status(f"Connecting... ({label})", "orange")
-        proc = self.proc = subprocess.Popen([tor, "-f", rcp], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                            text=True, creationflags=NOFLASH)
+        # the Linux bundle's tor sits next to its own libevent/openssl
+        env = {**os.environ, "LD_LIBRARY_PATH": os.path.dirname(tor)} if not WIN and tor.startswith(HOME) else None
+        proc = self.proc = popen([tor, "-f", rcp], env=env)
         state = {"pct": -1, "t": time.time(), "done": False}
 
         def watchdog():
@@ -900,19 +995,21 @@ class App:
             ensure_singbox(self.log)
             cidrs, domains = split_nets(self.s["bypass"])
             if self.s["bypass_ir"]:
-                cidrs += country_nets(os.path.join(HOME, "data", "geoip"), "IR")
+                if os.path.exists(geoip()):
+                    cidrs += country_nets(geoip(), "IR")
+                else:
+                    self.log(f"no GeoIP file ({geoip()}): Iranian IPs go through Tor (install tor-geoipdb)")
             mode = self.s["app_mode"]
             cfg = singbox_config(mode, app_names(self.s["apps"]), cidrs, domains, (LOCAL, SOCKS))
             path = os.path.join(HOME, "sing-box.json")
             json.dump(cfg, open(path, "w"), indent=1)
             self.log(f"VPN: mode={mode}, {len(cidrs)} direct IP ranges, {len(domains)} direct domains")
-            self.tun = subprocess.Popen([SINGBOX, "run", "-c", path, "-D", HOME], cwd=HOME, stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, text=True, creationflags=NOFLASH)
+            self.tun = popen([SINGBOX, "run", "-c", path, "-D", HOME], cwd=HOME)
             threading.Thread(target=lambda: [self.log("sing-box: " + re.sub(r"\x1b\[[0-9;]*m", "", l)) for l in self.tun.stdout], daemon=True).start()
             time.sleep(3)
             if self.tun.poll() is not None:
                 raise RuntimeError("sing-box exited, see log")
-            run("ipconfig", "/flushdns")
+            run("ipconfig", "/flushdns") if WIN else run("resolvectl", "flush-caches")
             self.status({"all": "Connected (whole system via Tor)", "except": "Connected (all apps except list)",
                          "only": "Connected (only listed apps)"}[mode], "green")
         except Exception as e:
@@ -932,9 +1029,8 @@ class App:
         if p and p.poll() is None:
             kill_tree(p)
         set_proxy(False)
-        if self.s["block_ipv6"] or ctypes.windll.shell32.IsUserAnAdmin():
-            run("netsh", "advfirewall", "firewall", "delete", "rule", f"name={FW_RULE}")
-            run("netsh", "advfirewall", "firewall", "delete", "rule", "name=TorBridge-noIPv6")  # left by the old name
+        if self.s["block_ipv6"] or is_admin():
+            block_ipv6(False)
         if self.sid:
             db("UPDATE sessions SET end=? WHERE id=?", (now(), self.sid))
             self.sid = None
@@ -942,10 +1038,45 @@ class App:
         if self.state_ != "err":
             self.render("Disconnected", "red")
 
+    def relaunch_root(self):
+        """Linux: run this app again as root via pkexec (polkit asks for the password); this window waits hidden
+        and closes once the root copy has exited, or comes back if the password was refused."""
+        keep = [f"{k}={os.environ[k]}" for k in ("DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR")
+                if k in os.environ]
+        keep += [f"GOMMAGE_HOME={HOME}", "PYTHONPATH=" + os.pathsep.join(p for p in sys.path if p)]
+        cmd = ["pkexec", "env", *keep, sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
+        self.win.hide()
+        try:
+            rc = subprocess.run(cmd).returncode
+        except FileNotFoundError:
+            rc = 127
+        if rc in (126, 127):  # dismissed / not authorised / no pkexec
+            self.win.show()
+            self.render("Root needed for VPN / IPv6 block (or run: sudo -E python3 gommage.py)", "red")
+            return
+        self.s = load_settings()  # the root copy learned bridges/stats; don't overwrite them on close
+        self.closing = True
+        self.win.destroy()
+
+    def give_back(self):
+        """Linux: files the root copy made in the user's folder go back to them (tor refuses a foreign DataDirectory)."""
+        uid = os.environ.get("PKEXEC_UID") or os.environ.get("SUDO_UID")
+        if WIN or not uid or os.geteuid() != 0:
+            return
+        import pwd
+        gid = pwd.getpwuid(int(uid)).pw_gid
+        for d, _, files in os.walk(HOME):
+            for p in [d] + [os.path.join(d, f) for f in files]:
+                try:
+                    os.chown(p, int(uid), gid, follow_symlinks=False)
+                except OSError:
+                    pass
+
     def quit_app(self):
         self.closing = True
         self.save_settings()
         self.stop()
+        self.give_back()
 
 
 if __name__ == "__main__":
@@ -986,7 +1117,8 @@ if __name__ == "__main__":
     assert pick_public({"x": ["a"], "y": ["a", "b"], "z": ["a"]}, {"x": 10, "y": 300, "z": False}) == ["y", "x"]
     assert pick_public({_ok: ["a"], _ok + " ": ["a"]}, {_ok: 5, _ok + " ": 9}) == [_ok]  # same fingerprint once
     assert split_nets("5.6.7.8\n10.0.0.0/8 # lan\nhttps://a.ir/x\n") == (["5.6.7.8/32", "10.0.0.0/8"], ["a.ir"])
-    if not ctypes.windll.shell32.IsUserAnAdmin() and "--no-admin" not in sys.argv:
+    assert app_names("/usr/bin/telegram-desktop") == ["telegram-desktop"]
+    if WIN and not is_admin() and "--no-admin" not in sys.argv:
         # VPN mode and the IPv6 block need admin: ask once at launch instead of restarting mid-connect.
         # --no-admin skips this (proxy mode only; toggle() still asks if VPN/IPv6 block is switched on)
         if ctypes.windll.shell32.ShellExecuteW(None, "runas", *self_cmd(), None, 1) > 32:

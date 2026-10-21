@@ -5,7 +5,7 @@
   </picture>
 </h1>
 
-<p align="center">A one-tap Tor client for Windows, built for people behind heavy censorship.<br>
+<p align="center">A one-tap Tor client for Windows and Linux, built for people behind heavy censorship.<br>
 <a href="#فارسی">فارسی</a></p>
 
 <p align="center"><img src="docs/screenshot.png" width="320" alt="Gommage main screen"></p>
@@ -32,7 +32,7 @@ On first connect it downloads the Tor Expert Bundle and, if you use whole-system
 ## Privacy
 
 - Gommage collects **nothing**. It has no analytics, no telemetry and no account.
-- Settings, history and logs stay on your PC in `%APPDATA%\Gommage`.
+- Settings, history and logs stay on your PC in `%APPDATA%\Gommage` (Linux: `~/.config/Gommage`).
 - Network requests go only to: Tor Project (Tor download, bridge API), GitHub/jsDelivr (sing-box download, public bridge lists), and Cloudflare (speed test, through Tor). After you connect, the bridge refresh goes through Tor.
 
 ### About public bridges
@@ -48,6 +48,25 @@ python gommage.py
 
 Requires Windows 10/11 with the WebView2 runtime (preinstalled on Windows 11). Running `gommage.py` also runs its built-in self-checks first.
 
+## Linux (experimental)
+
+> Linux support is new and hasn't been tested on many systems yet. Bug reports are very welcome.
+
+There is no prebuilt package yet; run it from source. On Debian/Ubuntu:
+
+```bash
+sudo apt install python3-venv python3-gi gir1.2-webkit2-4.1 tor tor-geoipdb obfs4proxy
+sh run.sh
+```
+
+(Fedora: `sudo dnf install python3-gobject webkit2gtk4.1 tor obfs4`; Arch: `sudo pacman -S python-gobject webkit2gtk-4.1 tor obfs4proxy`.) `run.sh` makes a `.venv` with pywebview on first run, then starts the app. pywebview's Qt backend works too if you prefer it (`pip install pywebview[qt]`).
+
+- **Tor:** if `tor` and `lyrebird` (or `obfs4proxy`) are installed, Gommage uses them. Otherwise it downloads the Linux Tor Expert Bundle and checks it against Tor Project's published SHA-256 list. The bundle also brings Tor's built-in bridges; distro packages don't have them, so with system Tor use your own or the public bridge lists. obfs4proxy only speaks obfs4; for webtunnel install `lyrebird`.
+- **Port clash:** a running `tor` service already holds port 9050. Stop it (`sudo systemctl disable --now tor`) or pick another SOCKS port in Settings.
+- **Proxy mode** sets the GNOME system proxy (`gsettings`), which GNOME apps, Chrome and Firefox (with "Use system proxy settings") follow. On other desktops point your apps at the HTTP proxy `127.0.0.1:8118` or SOCKS5 `127.0.0.1:9050` yourself.
+- **Whole-system mode and the IPv6 block need root.** When you turn them on, Gommage asks for your password (pkexec) and reopens as root; or start it with `sudo -E sh run.sh`. sing-box is downloaded through Tor and checked against its SHA-256. The IPv6 block uses nftables (or ip6tables).
+- **Split tunnelling** matches Linux program names, e.g. `telegram-desktop` or `firefox`, not `.exe` names.
+
 ### Build the exe
 
 ```bash
@@ -61,6 +80,7 @@ pyinstaller --onefile --noconsole --name Gommage --icon assets/icon.ico --add-da
 |---|---|
 | `gommage.py` | Everything that isn't drawing: Tor/sing-box control, bridge discovery and ranking, settings, window |
 | `ui.html` | The whole interface (HTML/CSS/JS, no framework) |
+| `run.sh` | Linux launcher: sets up a venv with pywebview, then runs the app |
 | `assets/` | Icon and donation QR codes |
 | `fonts/` | Red Hat Display (SIL OFL 1.1) |
 
@@ -86,7 +106,7 @@ QR codes are on the **Support** page inside the app.
 
 ## فارسی
 
-**Gommage** یه برنامه‌ی ساده برای وصل شدن به شبکه‌ی Tor روی ویندوزه، مخصوص جاهایی که فیلترینگ شدیده.
+**Gommage** یه برنامه‌ی ساده برای وصل شدن به شبکه‌ی Tor روی ویندوز و لینوکسه، مخصوص جاهایی که فیلترینگ شدیده.
 
 ### چه کار می‌کنه
 
@@ -108,7 +128,28 @@ QR codes are on the **Support** page inside the app.
 ### حریم خصوصی
 
 - برنامه **هیچ داده‌ای جمع نمی‌کنه**: آماری نمی‌فرسته و حساب کاربری هم نداره.
-- تنظیمات، تاریخچه و لاگ فقط روی کامپیوتر خودت توی `%APPDATA%\Gommage` می‌مونن.
+- تنظیمات، تاریخچه و لاگ فقط روی کامپیوتر خودت توی `%APPDATA%\Gommage` می‌مونن (لینوکس: `~/.config/Gommage`).
+
+### لینوکس (آزمایشی)
+
+> پشتیبانی لینوکس تازه‌ست و هنوز روی سیستم‌های زیادی تست نشده. اگه مشکلی دیدی، گزارش بده.
+
+فعلاً بسته‌ی آماده نداره و باید از سورس اجراش کنی. روی دبیان یا اوبونتو:
+
+<div dir="ltr">
+
+```bash
+sudo apt install python3-venv python3-gi gir1.2-webkit2-4.1 tor tor-geoipdb obfs4proxy
+sh run.sh
+```
+
+</div>
+
+- اگه `tor` و `lyrebird` (یا `obfs4proxy`) نصب باشن، برنامه از همونا استفاده می‌کنه. وگرنه بسته‌ی Tor لینوکس رو دانلود می‌کنه و با هش SHA-256 بررسیش می‌کنه. bridgeهای داخلی Tor فقط توی همین بسته هستن؛ با Tor سیستم از bridge خودت یا لیست‌های عمومی استفاده کن. obfs4proxy فقط obfs4 رو پشتیبانی می‌کنه؛ برای webtunnel باید `lyrebird` نصب کنی.
+- اگه سرویس tor روشنه، پورت 9050 رو گرفته. یا خاموشش کن (`sudo systemctl disable --now tor`) یا توی Settings پورت SOCKS رو عوض کن.
+- حالت پروکسی، پروکسی سیستم GNOME رو تنظیم می‌کنه. روی دسکتاپ‌های دیگه برنامه‌هات رو خودت روی `127.0.0.1:8118` (HTTP) یا `127.0.0.1:9050` (SOCKS5) تنظیم کن.
+- **حالت کل سیستم و مسدود کردن IPv6 دسترسی root می‌خوان.** وقتی روشنشون کنی برنامه رمزت رو می‌پرسه (pkexec) و با root دوباره باز می‌شه. می‌تونی هم از اول با `sudo -E sh run.sh` اجراش کنی.
+- توی لیست برنامه‌ها اسم برنامه‌ی لینوکسی رو بنویس، مثلاً `telegram-desktop`، نه اسم exe.
 
 ### درباره‌ی bridgeهای عمومی
 

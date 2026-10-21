@@ -442,7 +442,7 @@ select option { background: #1b1e25; }
     <section class="tab" id="t-split">
       <p class="lead">VPN mode only. Choose which apps go through Tor — everything else connects directly.</p>
       <div class="group"><div class="item"><div class="grow"><b>Apps</b></div><select id="app_mode"></select></div></div>
-      <div class="btns"><span class="label" style="margin:0;flex:1">App list (exe names)</span><button class="btn" onclick="api('pick_app')">+ Add app…</button></div>
+      <div class="btns"><span id="apps_label" class="label" style="margin:0;flex:1">App list (exe names)</span><button class="btn" onclick="api('pick_app')">+ Add app…</button></div>
       <textarea id="apps" rows="6" spellcheck="false" placeholder="Telegram.exe"></textarea>
       <div class="group"><div class="item"><div class="grow"><b>Iranian IPs direct</b><small>Domestic sites skip Tor</small></div><span class="tg" data-k="bypass_ir" onclick="flip('bypass_ir')"></span></div></div>
       <span class="label">Always direct</span>
@@ -460,7 +460,7 @@ select option { background: #1b1e25; }
       <p class="lead">DNS in VPN mode always uses <code>127.0.0.1:9053</code>.</p>
       <span class="label">Startup</span>
       <div class="group">
-        <div class="item"><div class="grow"><b>Start with Windows</b></div><span class="tg" data-k="autostart" onclick="flip('autostart')"></span></div>
+        <div class="item"><div class="grow"><b id="autostart_label">Start with Windows</b></div><span class="tg" data-k="autostart" onclick="flip('autostart')"></span></div>
         <div class="item"><div class="grow"><b>Connect when app opens</b></div><span class="tg" data-k="autoconnect" onclick="flip('autoconnect')"></span></div>
       </div>
     </section>
@@ -689,6 +689,7 @@ window.addEventListener("pywebviewready", async () => {
   $("app_mode").innerHTML = Object.entries(d.app_modes).map(([k, v]) => `<option value="${k}">${v}</option>`).join("");
   $("app_mode").value = S.app_mode;
   $("app_mode").onchange = e => { S.app_mode = e.target.value; api("set", "app_mode", S.app_mode); };
+  if (!d.windows) { $("apps_label").textContent = "App list (program names)"; $("apps").placeholder = "telegram-desktop"; $("autostart_label").textContent = "Start at login"; }
   $("log").value = d.log; $("logpath").innerHTML = `Also saved to <code>${esc(d.log_path)}</code>`;
   drawMap(); buildFlags(); paintToggles(); render();
 });
