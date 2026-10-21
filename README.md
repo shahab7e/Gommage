@@ -52,10 +52,18 @@ Requires Windows 10/11 with the WebView2 runtime (preinstalled on Windows 11). R
 
 > Linux support is new and hasn't been tested on many systems yet. Bug reports are very welcome.
 
-There is no prebuilt package yet; run it from source. On Debian/Ubuntu:
+**Debian / Ubuntu (22.04 or newer):** download `gommage_*_amd64.deb` from [Releases](../../releases) and install it:
 
 ```bash
-sudo apt install python3-venv python3-gi gir1.2-webkit2-4.1 tor tor-geoipdb obfs4proxy
+sudo apt install ./gommage_1.0.0_amd64.deb
+```
+
+Then open **Gommage** from your app menu, or run `gommage`. Remove it with `sudo apt remove gommage`. On first connect it downloads Tor's own bundle (hash-checked), which includes webtunnel and Tor's built-in bridges.
+
+**Other distros, or from source:**
+
+```bash
+sudo apt install python3-venv python3-gi gir1.2-webkit2-4.1
 sh run.sh
 ```
 
@@ -81,6 +89,7 @@ pyinstaller --onefile --noconsole --name Gommage --icon assets/icon.ico --add-da
 | `gommage.py` | Everything that isn't drawing: Tor/sing-box control, bridge discovery and ranking, settings, window |
 | `ui.html` | The whole interface (HTML/CSS/JS, no framework) |
 | `run.sh` | Linux launcher: sets up a venv with pywebview, then runs the app |
+| `packaging/linux/build-deb.sh` | Builds the `.deb` (GitHub Actions runs it and test-starts the app on every release) |
 | `assets/` | Icon and donation QR codes |
 | `fonts/` | Red Hat Display (SIL OFL 1.1) |
 
@@ -134,12 +143,24 @@ QR codes are on the **Support** page inside the app.
 
 > پشتیبانی لینوکس تازه‌ست و هنوز روی سیستم‌های زیادی تست نشده. اگه مشکلی دیدی، گزارش بده.
 
-فعلاً بسته‌ی آماده نداره و باید از سورس اجراش کنی. روی دبیان یا اوبونتو:
+**دبیان و اوبونتو (۲۲.۰۴ به بعد):** فایل `gommage_*_amd64.deb` رو از بخش [Releases](../../releases) بگیر و نصبش کن:
 
 <div dir="ltr">
 
 ```bash
-sudo apt install python3-venv python3-gi gir1.2-webkit2-4.1 tor tor-geoipdb obfs4proxy
+sudo apt install ./gommage_1.0.0_amd64.deb
+```
+
+</div>
+
+بعد **Gommage** رو از منوی برنامه‌ها باز کن یا دستور `gommage` رو بزن. برای حذف: `sudo apt remove gommage`.
+
+**توزیع‌های دیگه یا اجرا از سورس:**
+
+<div dir="ltr">
+
+```bash
+sudo apt install python3-venv python3-gi gir1.2-webkit2-4.1
 sh run.sh
 ```
 
