@@ -41,8 +41,8 @@ SB_FILE = f"sing-box-{SB_VER}-" + ("windows-amd64.zip" if WIN else "linux-amd64.
 # bumped; if TOR_SHA256 is ever left empty the bundle is checked against that checksum list from the same server.
 SB_SHA256 = ("9acbda81d7a9a93d8d0616990cf8b804523adfcd0215d11a2dd9370746d2be28" if WIN else
              "950af37eb2d7e55dddae34a18411cd617303fd99d2dc75bc76b6dd9fcd97d9c5")
-# ponytail: Linux bundle not pinned yet (Tor's site was unreachable when this was written); fill it from the checksum list
-TOR_SHA256 = "c1988c701de2f24f7d098d1d6d7f507b58f27740d097f29c246e0524d639b252" if WIN else ""
+TOR_SHA256 = ("c1988c701de2f24f7d098d1d6d7f507b58f27740d097f29c246e0524d639b252" if WIN else
+              "19cf18726eecb362e0f21d27afa9ea9efe5da928bfdfbb1ceb5fe54519e87f4a")
 APP_MODES = {"all": "All apps via Tor", "except": "All apps except the list", "only": "Only apps in the list"}
 # Tor's own traffic must never loop into the tunnel
 TOR_PROCS = ["tor.exe", "lyrebird.exe", "conjure-client.exe"] if WIN else ["tor", "lyrebird", "obfs4proxy", "conjure-client"]
