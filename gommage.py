@@ -4,6 +4,7 @@ Run: python gommage.py   (first run needs the Tor Expert Bundle, or on Linux the
 import ctypes, glob, hashlib, io, ipaddress, json, ntpath, os, re, shutil, signal, socket, sqlite3, ssl, subprocess, sys
 import tarfile, threading, time, urllib.request, zipfile
 from concurrent.futures import ThreadPoolExecutor
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))  # .deb install vendors pywebview here
 import webview
 
 WIN = sys.platform == "win32"

@@ -1,0 +1,67 @@
+name: Linux package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Package version, e.g. 1.0.0"
+        required: true
+        default: "1.0.0"
+      release:
+        description: "Attach the .deb to the release with tag v<version>"
+        type: boolean
+        default: false
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  deb:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        run: |
+          V="${{ github.event.inputs.version }}"
+          [ -n "$V" ] || V="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+
+      - name: Build .deb
+        run: sh packaging/linux/build-deb.sh "$VERSION"
+
+      - name: Install it like a user would
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ./dist/gommage_${VERSION}_amd64.deb xvfb imagemagick dbus-x11
+          dpkg -L gommage | head -20
+
+      # Starts the real app on a virtual screen: its built-in self-checks run first (a failure exits non-zero),
+      # then the window must still be open after 20 s. A screenshot of it is kept as an artifact.
+      - name: Smoke test
+        run: |
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1280x900x24 & sleep 2
+          dbus-launch --exit-with-session gommage > app.log 2>&1 & APP=$!
+          sleep 20
+          import -window root screenshot.png
+          if ! kill -0 $APP 2>/dev/null; then echo "app exited early"; cat app.log; exit 1; fi
+          kill $APP || true
+          if grep -q "Traceback" app.log; then cat app.log; exit 1; fi
+          cat app.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gommage-linux
+          path: |
+            dist/gommage_*_amd64.deb
+            screenshot.png
+            app.log
+
+      - name: Attach to release
+        if: github.event_name == 'release' || github.event.inputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "v$VERSION" dist/gommage_${VERSION}_amd64.deb --clobber
