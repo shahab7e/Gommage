@@ -55,7 +55,7 @@ Requires Windows 10/11 with the WebView2 runtime (preinstalled on Windows 11). R
 **Debian / Ubuntu (22.04 or newer):** download `gommage_*_amd64.deb` from [Releases](../../releases) and install it:
 
 ```bash
-sudo apt install ./gommage_1.0.0_amd64.deb
+sudo apt install ./gommage_1.1.0_amd64.deb
 ```
 
 Then open **Gommage** from your app menu, or run `gommage`. Remove it with `sudo apt remove gommage`. On first connect it downloads Tor's own bundle (hash-checked), which includes webtunnel and Tor's built-in bridges.
@@ -150,7 +150,7 @@ QR codes are on the **Support** page inside the app.
 <div dir="ltr">
 
 ```bash
-sudo apt install ./gommage_1.0.0_amd64.deb
+sudo apt install ./gommage_1.1.0_amd64.deb
 ```
 
 </div>
