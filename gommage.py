@@ -2,7 +2,7 @@
 Run: python gommage.py   (first run needs the Tor Expert Bundle, or on Linux the system's tor; see ensure_tor)
 """
 import base64, ctypes, glob, hashlib, io, ipaddress, json, ntpath, os, re, shutil, signal, socket, sqlite3, ssl, subprocess, sys
-import random, tarfile, threading, time, urllib.request, zipfile
+import random, tarfile, threading, time, urllib.request, webbrowser, zipfile
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))  # .deb install vendors pywebview here
 import webview
@@ -23,6 +23,8 @@ if WIN:
             HOME = OLD_HOME  # old copy still running and holding files; keep using its folder, move it next launch
 else:  # GOMMAGE_HOME: set by relaunch_root so the root copy keeps the user's settings
     HOME = os.environ.get("GOMMAGE_HOME") or os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "Gommage")
+VERSION = "1.0.0"  # bump with every release; the app compares it with the latest GitHub release tag
+REPO = "shahab7e/Gommage"
 SOCKS = 9050  # defaults; overwritten from settings by apply_ports()
 HTTP = 8118  # HTTPS CONNECT proxy: browsers resolve DNS through Tor (plain SOCKS via WinINET leaks/breaks DNS)
 LISTEN = "127.0.0.1"
@@ -427,6 +429,19 @@ def fetch_bridges(via_proxy=None, log=print):
     return []
 
 
+def latest_version(proxy):
+    """Version of the newest GitHub release, e.g. "1.1.0" for tag v1.1.0."""
+    o = urllib.request.build_opener(urllib.request.ProxyHandler({"https": proxy}))
+    o.addheaders = [("User-Agent", "Gommage")]
+    return json.load(o.open(f"https://api.github.com/repos/{REPO}/releases/latest", timeout=30))["tag_name"].lstrip("v")
+
+
+def newer(a, b):
+    """True if version b is newer than a."""
+    v = lambda x: tuple(int(n) for n in re.findall(r"\d+", x))
+    return v(b) > v(a)
+
+
 def speed_test(proxy, seconds=8):
     """(latency_ms, mbps) through the HTTP proxy, downloading from Cloudflare for at most `seconds`."""
     o = urllib.request.build_opener(urllib.request.ProxyHandler({"https": proxy}))
@@ -621,6 +636,9 @@ class Api:
 
     def pick_app(self):
         self._app.pick_app()
+
+    def open_update(self):
+        webbrowser.open(f"https://github.com/{REPO}/releases/latest")
 
     def history(self):
         return db("SELECT start, end, mode, country, status FROM sessions ORDER BY id DESC LIMIT 200")
@@ -903,6 +921,12 @@ class App:
 
     def after_connect(self):
         time.sleep(12)
+        try:
+            ver = latest_version(f"http://{LOCAL}:{HTTP}")
+            if newer(VERSION, ver):
+                self.push(update=ver)
+        except Exception as e:
+            self.log(f"update check: {e}")
         self.run_speed()
         if self.proc:  # keep a fresh reserve for next time, fetched safely through Tor
             via = f"http://{LOCAL}:{HTTP}"
@@ -1189,6 +1213,7 @@ if __name__ == "__main__":
     assert pick_public({_ok: ["a"], _ok + " ": ["a"]}, {_ok: 5, _ok + " ": 9}) == [_ok]  # same fingerprint once
     assert split_nets("5.6.7.8\n10.0.0.0/8 # lan\nhttps://a.ir/x\n") == (["5.6.7.8/32", "10.0.0.0/8"], ["a.ir"])
     assert app_names("/usr/bin/telegram-desktop") == ["telegram-desktop"]
+    assert newer("1.0.0", "1.0.1") and newer("1.9.0", "1.10.0") and not newer("1.1.0", "1.1.0") and not newer("2.0", "1.9")
     _id = base64.b64encode(bytes.fromhex("AB" * 20)).decode().rstrip("=")
     assert exit_relays(f"r a {_id} x\ns Exit Fast Running\nr b {_id} x\ns BadExit Exit Fast\nr c {_id} x\ns Fast") == ["AB" * 20]
     if WIN and not is_admin() and "--no-admin" not in sys.argv:

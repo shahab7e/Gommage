@@ -77,6 +77,8 @@ sh run.sh
 
 ### Build the exe
 
+Before a release, set `VERSION` in `gommage.py` to the new tag's version (tag `v1.1.0` → `"1.1.0"`). Running copies check the latest release through Tor after connecting and offer the download when it's newer.
+
 ```bash
 pip install pyinstaller
 pyinstaller --onefile --noconsole --name Gommage --icon assets/icon.ico --add-data "ui.html;." --add-data "fonts;fonts" --add-data "assets;assets" gommage.py

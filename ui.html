@@ -103,6 +103,8 @@ body[data-state=on] .sub { display: none; }
   background: rgba(255,255,255,.08); transition: background .2s, transform .4s var(--ease); }
 .ghost:hover { background: rgba(255,255,255,.16); color: #fff; transform: rotate(180deg); }
 .ghost svg { width: 12px; height: 12px; }
+.ghost.pill { width: auto; border-radius: 11px; padding: 0 8px; gap: 5px; grid-auto-flow: column; font-size: 11px; }
+.ghost.pill:hover { transform: none; }
 .speedtest { color: rgba(255,255,255,.55); cursor: pointer; }
 .speedtest:hover { color: var(--text); }
 body:not([data-state=on]) .on-only { display: none !important; }
@@ -169,6 +171,7 @@ body[data-state=busy] .rings .lit circle { stroke: #ffd38a; opacity: var(--o); a
 .rings .wedge { transform-box: view-box; transform-origin: 150px 150px; animation: sweep 1.5s linear infinite; }
 @keyframes sweep { from { transform: rotate(-25deg); } to { transform: rotate(205deg); } }
 .hint { margin-top: 78px; font-size: 12px; color: rgba(255,255,255,.55); letter-spacing: .2px; }
+.hint.upd { margin-top: 6px; color: var(--accent); cursor: pointer; }
 
 /* ---------- quick settings ---------- */
 .quick { padding: 0 18px 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -328,7 +331,7 @@ select option { background: #1b1e25; }
     <div class="on-only">
       <div class="exit" id="exitrow" style="display:none"><span class="mini" id="exitflag"></span><span class="num" id="exitip"></span>
         <button class="ghost" onclick="api('new_identity')" title="New identity (new Tor circuit)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/></svg></button>
-        <button class="ghost" onclick="api('gemini_exit')" title="Find an exit Gemini accepts (New identity undoes it)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M12 2c.6 5.4 4.6 9.4 10 10-5.4.6-9.4 4.6-10 10-.6-5.4-4.6-9.4-10-10 5.4-.6 9.4-4.6 10-10z"/></svg></button></div>
+        <button class="ghost pill" onclick="api('gemini_exit')" title="Find a Tor exit Gemini accepts (New identity undoes it)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M12 2c.6 5.4 4.6 9.4 10 10-5.4.6-9.4 4.6-10 10-.6-5.4-4.6-9.4-10-10 5.4-.6 9.4-4.6 10-10z"/></svg>Can't open Gemini?</button></div>
     </div>
   </div>
 
@@ -363,6 +366,7 @@ select option { background: #1b1e25; }
       </div>
     </div>
     <div class="hint" id="hint">Swipe down to connect</div>
+    <div class="hint upd" id="upd" onclick="api('open_update')" style="display:none"></div>
   </div>
 
   <div class="quick">
@@ -663,6 +667,8 @@ function render() {
   $("up").textContent = fmtRate(st.up);
   $("speed").textContent = st.speed ? "⚡ " + st.speed : "⚡ Run speed test";
   $("test").textContent = st.test || "";
+  $("upd").style.display = st.update ? "" : "none";
+  $("upd").textContent = st.update ? `Gommage ${st.update} is out · tap to download` : "";
   if (st.exit) {
     $("exitrow").style.display = "";
     $("exitip").textContent = st.exit.ip;
