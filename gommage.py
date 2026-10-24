@@ -141,10 +141,12 @@ def load_settings():
     try:
         s.update(json.load(open(SETTINGS, encoding="utf8")))
     except (OSError, ValueError):
-        try:  # older versions kept only bridges.txt
-            s["bridges"] = open(os.path.join(HOME, "bridges.txt"), encoding="utf8").read()
-        except OSError:
-            pass
+        for f in (os.path.join(HOME, "bridges.txt"), os.path.join(APP_DIR, "assets", "bridges.txt")):
+            try:  # older versions kept only bridges.txt; a fresh install starts from the shipped bridges
+                s["bridges"] = open(f, encoding="utf8").read()
+                break
+            except OSError:
+                pass
     return s
 
 
