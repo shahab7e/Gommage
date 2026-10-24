@@ -1,8 +1,8 @@
 """Gommage: tiny Tor client (Windows, Linux) with custom bridges (webtunnel/obfs4/...), system proxy or whole-system VPN.
 Run: python gommage.py   (first run needs the Tor Expert Bundle, or on Linux the system's tor; see ensure_tor)
 """
-import ctypes, glob, hashlib, io, ipaddress, json, ntpath, os, re, shutil, signal, socket, sqlite3, ssl, subprocess, sys
-import tarfile, threading, time, urllib.request, zipfile
+import base64, ctypes, glob, hashlib, io, ipaddress, json, ntpath, os, re, shutil, signal, socket, sqlite3, ssl, subprocess, sys
+import random, tarfile, threading, time, urllib.request, zipfile
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))  # .deb install vendors pywebview here
 import webview
@@ -439,6 +439,35 @@ def speed_test(proxy, seconds=8):
     return round(lat), n * 8 / 1e6 / max(time.perf_counter() - t0, 0.001)
 
 
+def exit_relays(ns):
+    """Fingerprints of usable exit relays (Exit + Fast, not BadExit) from GETINFO ns/all."""
+    out, fp = [], None
+    for line in ns.splitlines():
+        if line.startswith("r "):
+            fp = base64.b64decode(line.split()[2] + "==").hex().upper()
+        elif line.startswith("s ") and fp:
+            flags = line.split()
+            if "Exit" in flags and "Fast" in flags and "BadExit" not in flags:
+                out.append(fp)
+    return out
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a):
+        return None  # a 3xx surfaces as HTTPError so we can look at where it points
+
+
+def gemini_ok(proxy):
+    """True if Gemini answers this exit; Google sends 403/429 or a /sorry/ redirect to exits it blocks."""
+    o = urllib.request.build_opener(urllib.request.ProxyHandler({"https": proxy}), NoRedirect)
+    o.addheaders = [("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36")]
+    try:
+        o.open("https://gemini.google.com/app", timeout=20).read(1)
+        return True
+    except urllib.error.HTTPError as e:
+        return e.code < 400 and "/sorry/" not in (e.headers.get("Location") or "")
+
+
 # seconds without bootstrap progress before switching bridges. Below 75% the bridge itself is failing, so
 # give up fast; at 75%+ the bridge works and only circuits are slow (often a strict exit country), so be patient.
 STALL_EARLY, STALL_LATE = 40, 180
@@ -572,6 +601,9 @@ class Api:
     def new_identity(self):
         self._app.new_identity()
 
+    def gemini_exit(self):
+        self._app.gemini_exit()
+
     def speed(self):
         if self._app.proc:
             threading.Thread(target=self._app.run_speed, daemon=True).start()
@@ -609,7 +641,7 @@ class App:
         self.cancelled = False
         self.state_ = "idle"
         self.ui_state = {}
-        self.closing = False
+        self.closing = self.finding = False
         relink_autostart = migrate_old_name()
         self.s = load_settings()
         if relink_autostart and self.s["autostart"]:
@@ -795,9 +827,45 @@ class App:
             self.push(test=f"{n} new bridges added" if n else "none of the new bridges are reachable right now")
         threading.Thread(target=go, daemon=True).start()
 
+    def exit_conf(self):
+        """Back to the exit chosen in Settings (undoes a pinned Gemini exit)."""
+        cc = COUNTRIES[self.s["country"]]
+        control(f"SETCONF ExitNodes={{{cc}}} StrictNodes=1" if cc else "RESETCONF ExitNodes StrictNodes")
+
+    def gemini_exit(self, tries=25):
+        """Opt-in: pin the exit to one relay Google doesn't block for Gemini. New identity undoes it."""
+        if self.finding or not self.proc:
+            return
+        self.finding = True
+
+        def go():
+            try:
+                exits = exit_relays(control("GETINFO ns/all"))
+                random.shuffle(exits)
+                for n, fp in enumerate(exits[:tries], 1):
+                    if not self.proc:
+                        return
+                    self.push(exit={"ip": f"finding a Gemini exit {n}/{tries}…", "cc": ""})
+                    control(f"SETCONF ExitNodes=${fp} StrictNodes=1")  # Tor drops circuits through the old exit
+                    try:
+                        if gemini_ok(f"http://{LOCAL}:{HTTP}"):
+                            self.log(f"Gemini works through exit ${fp}")
+                            return self.show_exit(0)
+                    except Exception as e:
+                        self.log(f"Gemini exit ${fp[:8]}: {e}")
+                self.log(f"no Gemini exit in {tries} tries")
+                self.exit_conf()
+                self.push(exit={"ip": "no Gemini exit found - try again", "cc": ""})
+            except Exception as e:
+                self.log(f"Gemini exit: {e}")
+            finally:
+                self.finding = False
+        threading.Thread(target=go, daemon=True).start()
+
     def new_identity(self):
         def go():
             try:
+                self.exit_conf()
                 control("SIGNAL NEWNYM")
                 self.push(exit={"ip": "getting new identity…", "cc": ""})
                 self.show_exit(4)
@@ -1119,6 +1187,8 @@ if __name__ == "__main__":
     assert pick_public({_ok: ["a"], _ok + " ": ["a"]}, {_ok: 5, _ok + " ": 9}) == [_ok]  # same fingerprint once
     assert split_nets("5.6.7.8\n10.0.0.0/8 # lan\nhttps://a.ir/x\n") == (["5.6.7.8/32", "10.0.0.0/8"], ["a.ir"])
     assert app_names("/usr/bin/telegram-desktop") == ["telegram-desktop"]
+    _id = base64.b64encode(bytes.fromhex("AB" * 20)).decode().rstrip("=")
+    assert exit_relays(f"r a {_id} x\ns Exit Fast Running\nr b {_id} x\ns BadExit Exit Fast\nr c {_id} x\ns Fast") == ["AB" * 20]
     if WIN and not is_admin() and "--no-admin" not in sys.argv:
         # VPN mode and the IPv6 block need admin: ask once at launch instead of restarting mid-connect.
         # --no-admin skips this (proxy mode only; toggle() still asks if VPN/IPv6 block is switched on)
