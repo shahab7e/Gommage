@@ -23,7 +23,7 @@ if WIN:
             HOME = OLD_HOME  # old copy still running and holding files; keep using its folder, move it next launch
 else:  # GOMMAGE_HOME: set by relaunch_root so the root copy keeps the user's settings
     HOME = os.environ.get("GOMMAGE_HOME") or os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "Gommage")
-VERSION = "1.1.0"  # bump with every release; the app compares it with the latest GitHub release tag
+VERSION = "1.1.1"  # bump with every release; the app compares it with the latest GitHub release tag
 REPO = "shahab7e/Gommage"
 SOCKS = 9050  # defaults; overwritten from settings by apply_ports()
 HTTP = 8118  # HTTPS CONNECT proxy: browsers resolve DNS through Tor (plain SOCKS via WinINET leaks/breaks DNS)
