@@ -27,7 +27,7 @@ Get `Gommage.exe` from [Releases](../../releases) and run it. It asks for admini
 
 On first connect it downloads the Tor Expert Bundle and, if you use whole-system mode, sing-box. **Both are checked against a SHA-256 hash before they run.** If the download is blocked, the app tells you the exact file to fetch another way and where to put it.
 
-> **Windows SmartScreen / antivirus:** the exe isn't code-signed, so Windows may warn "Windows protected your PC". Click *More info → Run anyway*. Some antivirus tools flag any Tor or VPN tool. If you'd rather not trust a binary, run it from source (below). It's two readable files.
+> **Windows SmartScreen / antivirus:** the exe isn't code-signed, so Windows may warn "Windows protected your PC". Click *More info → Run anyway*. Some antivirus tools flag any Tor or VPN tool. Microsoft Defender may block it as `Behavior:Win32/Impact.A!ml`: that's a machine-learning guess, set off by an unsigned exe that asks for admin and changes proxy and firewall settings. It's a false positive. If you'd rather not trust a binary, run it from source (below). It's two readable files.
 
 ## Privacy
 
@@ -134,7 +134,7 @@ QR codes are on the **Support** page inside the app.
 
 دفعه‌ی اول، Tor و برای حالت VPN برنامه‌ی sing-box دانلود می‌شن. **درستی هر دو قبل از اجرا با هش SHA-256 بررسی می‌شه.** اگه دانلود فیلتر بود، برنامه دقیقاً می‌گه کدوم فایل رو از راه دیگه بگیری و کجا بذاری.
 
-> **هشدار ویندوز یا آنتی‌ویروس:** فایل امضای دیجیتال نداره، برای همین ممکنه ویندوز بگه «Windows protected your PC». روی *More info ← Run anyway* بزن. بعضی آنتی‌ویروس‌ها هم به هر ابزار Tor یا VPN گیر می‌دن. اگه به فایل exe اعتماد نداری، از سورس اجرا کن. کل برنامه دو فایل خواناست.
+> **هشدار ویندوز یا آنتی‌ویروس:** فایل امضای دیجیتال نداره، برای همین ممکنه ویندوز بگه «Windows protected your PC». روی *More info ← Run anyway* بزن. بعضی آنتی‌ویروس‌ها هم به هر ابزار Tor یا VPN گیر می‌دن. ممکنه Microsoft Defender هم جلوش رو بگیره و بگه `Behavior:Win32/Impact.A!ml`. این حدسِ یادگیری ماشینیِ Defender هست، چون فایل امضا نداره، دسترسی admin می‌خواد و تنظیمات پراکسی و فایروال رو عوض می‌کنه. هشدار اشتباهه. اگه به فایل exe اعتماد نداری، از سورس اجرا کن. کل برنامه دو فایل خواناست.
 
 ### حریم خصوصی
 
