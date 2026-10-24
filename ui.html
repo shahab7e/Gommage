@@ -77,6 +77,7 @@ body[data-state=on] .map circle { fill: rgba(0,0,0,.12); }
   transition: width .45s var(--ease), height .45s var(--ease), opacity .45s, filter .45s; opacity: .55; filter: saturate(.75); }
 .flag:hover { opacity: .85; }
 .flag.sel { width: 50px; height: 50px; opacity: 1; filter: none; box-shadow: 0 0 0 3px rgba(255,255,255,.0), 0 0 0 5px rgba(255,255,255,.9), 0 10px 24px rgba(0,0,0,.4); }
+i > img { width: 100%; height: 100%; display: block; }
 .flag i { position: absolute; inset: 0; border-radius: 50%; overflow: hidden; display: grid; place-items: center; font-style: normal; }
 .flag i::after { content: ""; position: absolute; inset: 0; border-radius: 50%;
   background: radial-gradient(circle at 30% 25%, rgba(255,255,255,.35), transparent 45%), radial-gradient(circle at 50% 120%, rgba(0,0,0,.25), transparent 60%); }
@@ -493,23 +494,10 @@ const $ = id => document.getElementById(id);
 let S = {}, C = {}, st = {}, since = null;
 const api = (fn, ...a) => window.pywebview.api[fn](...a);
 
-// ---- flags painted in CSS (Windows can't render flag emoji) ----
-const F = {
-  "": `background:#3a4152`,
-  nl: `background:linear-gradient(#ae1c28 33.4%,#fff 0 66.6%,#21468b 0)`,
-  de: `background:linear-gradient(#111 33.4%,#dd0000 0 66.6%,#ffce00 0)`,
-  fr: `background:linear-gradient(90deg,#0055a4 33.4%,#fff 0 66.6%,#ef4135 0)`,
-  at: `background:linear-gradient(#c8102e 33.4%,#fff 0 66.6%,#c8102e 0)`,
-  fi: `background:linear-gradient(90deg,transparent 30%,#003580 0 46%,transparent 0),linear-gradient(transparent 41%,#003580 0 59%,transparent 0),#fff`,
-  se: `background:linear-gradient(90deg,transparent 30%,#fecc00 0 46%,transparent 0),linear-gradient(transparent 41%,#fecc00 0 59%,transparent 0),#006aa7`,
-  ch: `background:linear-gradient(#fff,#fff) center/58% 18% no-repeat,linear-gradient(#fff,#fff) center/18% 58% no-repeat,#d52b1e`,
-  ca: `background:linear-gradient(90deg,#d52b1e 27%,#fff 0 73%,#d52b1e 0)`,
-  gb: `background:linear-gradient(90deg,transparent 44%,#c8102e 0 56%,transparent 0),linear-gradient(transparent 44%,#c8102e 0 56%,transparent 0),linear-gradient(90deg,transparent 38%,#fff 0 62%,transparent 0),linear-gradient(transparent 38%,#fff 0 62%,transparent 0),linear-gradient(45deg,transparent 45%,#c8102e 0 50%,#fff 0 55%,transparent 0),linear-gradient(-45deg,transparent 45%,#fff 0 50%,#c8102e 0 55%,transparent 0),#012169`,
-  us: `background:linear-gradient(#3c3b6e,#3c3b6e) 0 0/46% 54% no-repeat,repeating-linear-gradient(#b22234 0 7.69%,#fff 0 15.38%)`,
-};
+// ---- flags: circle-flags SVGs (MIT, assets/flags); Windows can't render flag emoji ----
 const GLOBE = `<svg viewBox="0 0 24 24" width="55%" height="55%" fill="none" stroke="#dfe3ec" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>`;
-const LEAF = `<svg viewBox="0 0 24 24" width="42%" height="42%"><path fill="#d52b1e" d="M12 2l1.6 3.2 1.8-.9-.6 4.3 2.6-2.4.6 1.6 2.6-.5-1 3 1.4.8-4.4 3.6.5 1.6-4.2-.6V20h-1.8v-4.3l-4.2.6.5-1.6L3.4 11.1l1.4-.8-1-3 2.6.5.6-1.6 2.6 2.4-.6-4.3 1.8.9z"/></svg>`;
-const flagHTML = cc => `<i style="${F[cc] ?? F[""]}">${cc === "" ? GLOBE : cc === "ca" ? LEAF : ""}</i>`;
+// only the exit countries in C ship a flag; any other exit (GeoIP can say anything) gets the globe
+const flagHTML = cc => Object.values(C).includes(cc) && cc ? `<i><img src="assets/flags/${cc}.svg" alt=""></i>` : `<i style="background:#3a4152">${GLOBE}</i>`;
 
 // coarse equirectangular land mask, drawn as a dot matrix (precision doesn't matter at this opacity)
 const LAND = [

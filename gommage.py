@@ -35,7 +35,8 @@ DB = os.path.join(HOME, "history.db")
 LOG = os.path.join(HOME, "log.txt")
 NOFLASH = 0x08000000 if WIN else 0  # CREATE_NO_WINDOW
 COUNTRIES = {"Any": "", "Netherlands": "nl", "Germany": "de", "France": "fr", "UK": "gb", "USA": "us",
-             "Canada": "ca", "Sweden": "se", "Switzerland": "ch", "Finland": "fi", "Austria": "at"}
+             "Canada": "ca", "Sweden": "se", "Switzerland": "ch", "Finland": "fi", "Austria": "at",
+             "Albania": "al", "Ukraine": "ua"}
 SINGBOX = os.path.join(HOME, "sing-box" + EXE)
 SB_VER = "1.11.15"  # ponytail: pinned; config below uses 1.11 syntax (newer majors renamed DNS fields)
 SB_FILE = f"sing-box-{SB_VER}-" + ("windows-amd64.zip" if WIN else "linux-amd64.tar.gz")  # ponytail: x86_64 only
