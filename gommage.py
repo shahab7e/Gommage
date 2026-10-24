@@ -469,20 +469,31 @@ def exit_relays(ns):
     return out
 
 
+def stale_circuits(status, fp):
+    """IDs of built circuits (from GETINFO circuit-status) whose exit isn't relay fp."""
+    return [m[1] for m in re.finditer(r"^(?:250[-+]circuit-status=)?(\d+) BUILT (\S+)", status, re.M)
+            if m[2].split(",")[-1].split("~")[0].lstrip("$") != fp]
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *a):
         return None  # a 3xx surfaces as HTTPError so we can look at where it points
 
 
+GOOGLE_AI = ("https://gemini.google.com/app", "https://notebook.google.com/")  # Gemini, NotebookLM
+
+
 def gemini_ok(proxy):
-    """True if Gemini answers this exit; Google sends 403/429 or a /sorry/ redirect to exits it blocks."""
+    """True if every GOOGLE_AI site answers this exit; Google sends 403/429 or a /sorry/ redirect to exits it blocks."""
     o = urllib.request.build_opener(urllib.request.ProxyHandler({"https": proxy}), NoRedirect)
     o.addheaders = [("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36")]
-    try:
-        o.open("https://gemini.google.com/app", timeout=20).read(1)
-        return True
-    except urllib.error.HTTPError as e:
-        return e.code < 400 and "/sorry/" not in (e.headers.get("Location") or "")
+    for url in GOOGLE_AI:
+        try:
+            o.open(url, timeout=20).read(1)
+        except urllib.error.HTTPError as e:
+            if e.code >= 400 or "/sorry/" in (e.headers.get("Location") or ""):
+                return False
+    return True
 
 
 # seconds without bootstrap progress before switching bridges. Below 75% the bridge itself is failing, so
@@ -852,8 +863,8 @@ class App:
         cc = COUNTRIES[self.s["country"]]
         control(f"SETCONF ExitNodes={{{cc}}} StrictNodes=1" if cc else "RESETCONF ExitNodes StrictNodes")
 
-    def gemini_exit(self, tries=25):
-        """Opt-in: pin the exit to one relay Google doesn't block for Gemini. New identity undoes it."""
+    def gemini_exit(self, tries=40):
+        """Opt-in: pin the exit to one relay Google doesn't block for Gemini/NotebookLM. New identity undoes it."""
         if self.finding or not self.proc:
             return
         self.finding = True
@@ -865,19 +876,24 @@ class App:
                 for n, fp in enumerate(exits[:tries], 1):
                     if not self.proc:
                         return
-                    self.push(exit={"ip": f"finding a Gemini exit {n}/{tries}…", "cc": ""})
+                    self.push(gemini=f"{n}/{tries}")
                     control(f"SETCONF ExitNodes=${fp} StrictNodes=1")  # Tor drops circuits through the old exit
                     try:
                         if gemini_ok(f"http://{LOCAL}:{HTTP}"):
-                            self.log(f"Gemini works through exit ${fp}")
+                            self.log(f"Gemini and NotebookLM work through exit ${fp}")
+                            # the browser keeps its Google connections open on circuits through the old exit; close
+                            # them so it reconnects through this one
+                            control(*(f"CLOSECIRCUIT {c}" for c in stale_circuits(control("GETINFO circuit-status"), fp)))
+                            self.push(gemini="ok")
                             return self.show_exit(0)
                     except Exception as e:
                         self.log(f"Gemini exit ${fp[:8]}: {e}")
                 self.log(f"no Gemini exit in {tries} tries")
                 self.exit_conf()
-                self.push(exit={"ip": "no Gemini exit found - try again", "cc": ""})
+                self.push(gemini="fail")
             except Exception as e:
                 self.log(f"Gemini exit: {e}")
+                self.push(gemini="fail")
             finally:
                 self.finding = False
         threading.Thread(target=go, daemon=True).start()
@@ -887,7 +903,7 @@ class App:
             try:
                 self.exit_conf()
                 control("SIGNAL NEWNYM")
-                self.push(exit={"ip": "getting new identity…", "cc": ""})
+                self.push(exit={"ip": "getting new identity…", "cc": ""}, gemini=None)
                 self.show_exit(4)
             except Exception as e:
                 self.log(f"NEWNYM failed: {e}")
@@ -1129,7 +1145,7 @@ class App:
         if self.sid:
             db("UPDATE sessions SET end=? WHERE id=?", (now(), self.sid))
             self.sid = None
-        self.push(exit=None, speed="", down=None, up=None)
+        self.push(exit=None, gemini=None, speed="", down=None, up=None)
         if self.state_ != "err":
             self.render("Disconnected", "red")
 
@@ -1213,6 +1229,8 @@ if __name__ == "__main__":
     assert pick_public({_ok: ["a"], _ok + " ": ["a"]}, {_ok: 5, _ok + " ": 9}) == [_ok]  # same fingerprint once
     assert split_nets("5.6.7.8\n10.0.0.0/8 # lan\nhttps://a.ir/x\n") == (["5.6.7.8/32", "10.0.0.0/8"], ["a.ir"])
     assert app_names("/usr/bin/telegram-desktop") == ["telegram-desktop"]
+    assert stale_circuits("250+circuit-status=\n7 BUILT $AA~a,$BB~b PURPOSE=GENERAL\n8 BUILT $AA~a,$CC~c\n9 EXTENDED $DD~d\n.",
+                          "BB") == ["8"]
     assert newer("1.0.0", "1.0.1") and newer("1.9.0", "1.10.0") and not newer("1.1.0", "1.1.0") and not newer("2.0", "1.9")
     _id = base64.b64encode(bytes.fromhex("AB" * 20)).decode().rstrip("=")
     assert exit_relays(f"r a {_id} x\ns Exit Fast Running\nr b {_id} x\ns BadExit Exit Fast\nr c {_id} x\ns Fast") == ["AB" * 20]

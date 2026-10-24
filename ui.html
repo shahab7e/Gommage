@@ -96,14 +96,15 @@ body[data-state=on] .sub { display: none; }
 .title { font-size: 28px; font-weight: 600; letter-spacing: .2px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color .3s; }
 .sub { font-size: 12px; color: rgba(255,255,255,.6); margin-top: 3px; min-height: 17px;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
-.exit { display: inline-flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; color: rgba(255,255,255,.85); }
+.exit { display: inline-flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; color: rgba(255,255,255,.85); white-space: nowrap; }
 .exit .mini { width: 16px; height: 16px; border-radius: 50%; overflow: hidden; position: relative; box-shadow: 0 0 0 1px rgba(255,255,255,.2); }
 .exit .mini i { position: absolute; inset: 0; display: grid; place-items: center; font-style: normal; }
 .ghost { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; color: rgba(255,255,255,.7);
   background: rgba(255,255,255,.08); transition: background .2s, transform .4s var(--ease); }
 .ghost:hover { background: rgba(255,255,255,.16); color: #fff; transform: rotate(180deg); }
 .ghost svg { width: 12px; height: 12px; }
-.ghost.pill { width: auto; border-radius: 11px; padding: 0 8px; gap: 5px; grid-auto-flow: column; font-size: 11px; }
+.ghost.pill { width: auto; border-radius: 11px; padding: 0 8px; gap: 5px; grid-auto-flow: column; font-size: 11px; white-space: nowrap; }
+.ghost.pill.ok { background: #fff; color: #17663f; font-weight: 600; }
 .ghost.pill:hover { transform: none; }
 .speedtest { color: rgba(255,255,255,.55); cursor: pointer; }
 .speedtest:hover { color: var(--text); }
@@ -331,7 +332,7 @@ select option { background: #1b1e25; }
     <div class="on-only">
       <div class="exit" id="exitrow" style="display:none"><span class="mini" id="exitflag"></span><span class="num" id="exitip"></span>
         <button class="ghost" onclick="api('new_identity')" title="New identity (new Tor circuit)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/></svg></button>
-        <button class="ghost pill" onclick="api('gemini_exit')" title="Find a Tor exit Gemini accepts (New identity undoes it)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M12 2c.6 5.4 4.6 9.4 10 10-5.4.6-9.4 4.6-10 10-.6-5.4-4.6-9.4-10-10 5.4-.6 9.4-4.6 10-10z"/></svg>Can't open Gemini?</button></div>
+        <button class="ghost pill" id="gem" onclick="api('gemini_exit')" title="Find a Tor exit that Gemini and NotebookLM accept (New identity undoes it)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M12 2c.6 5.4 4.6 9.4 10 10-5.4.6-9.4 4.6-10 10-.6-5.4-4.6-9.4-10-10 5.4-.6 9.4-4.6 10-10z"/></svg><span id="gemtxt">Can't open Gemini?</span></button></div>
     </div>
   </div>
 
@@ -667,6 +668,9 @@ function render() {
   $("up").textContent = fmtRate(st.up);
   $("speed").textContent = st.speed ? "⚡ " + st.speed : "⚡ Run speed test";
   $("test").textContent = st.test || "";
+  $("gemtxt").textContent = { ok: "Gemini unblocked ✓", fail: "None found · retry" }[st.gemini]
+    || (st.gemini ? `Searching ${st.gemini}…` : "Can't open Gemini?");
+  $("gem").classList.toggle("ok", st.gemini === "ok");
   $("upd").style.display = st.update ? "" : "none";
   $("upd").textContent = st.update ? `Gommage ${st.update} is out · tap to download` : "";
   if (st.exit) {
