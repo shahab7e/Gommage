@@ -21,6 +21,8 @@ Gommage connects you to the Tor network through **bridges**, which are relays th
 - **Fresh bridges.** It pulls community bridge lists from GitHub (with a jsDelivr mirror), checks they are well-formed, tests them in parallel and keeps the fastest. Bridges listed by more than one source rank higher.
 - **Whole-system mode (VPN).** Routes every app, including Telegram and games, through Tor using [sing-box](https://github.com/SagerNet/sing-box). Split tunnelling lets you pick which apps use Tor and send Iranian IPs or chosen domains direct.
 - **Proxy mode.** A system HTTP proxy plus SOCKS5. You can share it with phones on your Wi-Fi.
+- **"Can't open Gemini?" button** (Windows and Linux). Google blocks many Tor exits for Gemini and NotebookLM. One tap searches for an exit Google accepts and pins it, and the button shows the progress and "Gemini unblocked ✓". *New identity* undoes it.
+- **Tray (Windows).** The close button hides Gommage to the tray and keeps the connection up. Right-click the tray icon for *Open* or *Quit*.
 - **Exit country**, live speed, new identity, IPv6 leak blocking and connection history.
 
 ## Download
@@ -154,6 +156,8 @@ QR codes are on the **Support** page inside the app.
 - **bridge تازه.** لیست‌های عمومی bridge رو از GitHub می‌گیره (اگه بسته بود از mirror به اسم jsDelivr). فقط خطوط معتبر رو قبول می‌کنه، همه رو موازی تست می‌کنه و سریع‌ترین‌ها رو نگه می‌داره.
 - **حالت کل سیستم (VPN).** همه‌ی برنامه‌ها، از جمله تلگرام، رو از Tor رد می‌کنه. می‌تونی تعیین کنی کدوم برنامه‌ها از Tor برن و آی‌پی‌های ایران یا دامنه‌های دلخواه مستقیم وصل بشن.
 - **حالت پروکسی.** پروکسی HTTP سیستم و SOCKS5، که با گوشی‌های روی همون Wi-Fi هم قابل اشتراکه.
+- **دکمه‌ی «Can't open Gemini?»** (ویندوز و لینوکس). گوگل خیلی از خروجی‌های Tor رو برای Gemini و NotebookLM می‌بنده. با یه لمس دنبال خروجی‌ای می‌گرده که گوگل قبول کنه و همون رو ثابت می‌کنه. روی خود دکمه پیشرفت جستجو و بعدش «Gemini unblocked ✓» نشون داده می‌شه. با «New identity» به حالت قبل برمی‌گرده.
+- **سینی سیستم (ویندوز).** دکمه‌ی بستن برنامه رو به سینی می‌بره و اتصال می‌مونه. برای باز کردن دوباره یا بستن کامل، روی آیکونش راست‌کلیک کن (*Open* یا *Quit*).
 - **امکانات دیگه:** انتخاب کشور خروجی، نمایش سرعت لحظه‌ای، تعویض هویت، جلوگیری از نشت IPv6 و تاریخچه‌ی اتصال.
 
 ### دانلود و اجرا
