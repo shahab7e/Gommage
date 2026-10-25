@@ -29,6 +29,18 @@ On first connect it downloads the Tor Expert Bundle and, if you use whole-system
 
 > **Windows SmartScreen / antivirus:** the exe isn't code-signed, so Windows may warn "Windows protected your PC". Click *More info → Run anyway*. Some antivirus tools flag any Tor or VPN tool. Microsoft Defender may block it as `Behavior:Win32/Impact.A!ml`: that's a machine-learning guess, set off by an unsigned exe that can ask for admin and changes proxy and firewall settings. It's a false positive. If you'd rather not trust a binary, run it from source (below). It's two readable files.
 
+## How it compares
+
+| | Gommage | Tor Browser | Psiphon | Lantern | Snowflake |
+|---|---|---|---|---|---|
+| What it is | Tor client with automatic bridge finding | Hardened browser over Tor | Circumvention VPN/proxy network | Circumvention VPN/proxy network | Proxy that donates bandwidth to Tor users |
+| Covers the whole system | Yes (VPN mode) or system proxy | Browser traffic only | Yes | Yes | Bridge transport only (used by Gommage too) |
+| Network | Tor (3 hops) | Tor (3 hops) | Psiphon servers | Lantern servers | Tor, via volunteers |
+| Needs bridge setup by hand | No, tries bridges for you | Yes, in Connection settings | No | No | Built in as a bridge type, also tried by Gommage |
+| Open source | Yes | Yes | Yes | Yes | Yes |
+
+Gommage isn't a replacement for Tor Browser's anti-fingerprinting. Use Tor Browser for sensitive browsing and Gommage when you need Telegram, other apps or the whole PC to get through. It uses obfs4, webtunnel, Snowflake and meek bridges, so Snowflake is one of the transports it tries rather than an alternative to it.
+
 ## Privacy
 
 - Gommage collects **nothing**. It has no analytics, no telemetry and no account.
