@@ -23,11 +23,11 @@ Gommage connects you to the Tor network through **bridges**, which are relays th
 
 ## Download
 
-Get `Gommage.exe` from [Releases](../../releases) and run it. It asks for administrator rights once, because whole-system mode and the IPv6 block need them. Run it with `--no-admin` for proxy mode only.
+Get `Gommage-windows.zip` from [Releases](../../releases), unzip it, and run `Gommage.exe`. It starts without administrator rights (proxy mode). Turning on whole-system mode or the IPv6 block asks for them at that moment.
 
 On first connect it downloads the Tor Expert Bundle and, if you use whole-system mode, sing-box. **Both are checked against a SHA-256 hash before they run.** If the download is blocked, the app tells you the exact file to fetch another way and where to put it.
 
-> **Windows SmartScreen / antivirus:** the exe isn't code-signed, so Windows may warn "Windows protected your PC". Click *More info → Run anyway*. Some antivirus tools flag any Tor or VPN tool. Microsoft Defender may block it as `Behavior:Win32/Impact.A!ml`: that's a machine-learning guess, set off by an unsigned exe that asks for admin and changes proxy and firewall settings. It's a false positive. If you'd rather not trust a binary, run it from source (below). It's two readable files.
+> **Windows SmartScreen / antivirus:** the exe isn't code-signed, so Windows may warn "Windows protected your PC". Click *More info → Run anyway*. Some antivirus tools flag any Tor or VPN tool. Microsoft Defender may block it as `Behavior:Win32/Impact.A!ml`: that's a machine-learning guess, set off by an unsigned exe that can ask for admin and changes proxy and firewall settings. It's a false positive. If you'd rather not trust a binary, run it from source (below). It's two readable files.
 
 ## Privacy
 
@@ -81,8 +81,10 @@ Before a release, set `VERSION` in `gommage.py` to the new tag's version (tag `v
 
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --noconsole --name Gommage --icon assets/icon.ico --add-data "ui.html;." --add-data "fonts;fonts" --add-data "assets;assets" gommage.py
+pyinstaller --onedir --noupx --noconsole --name Gommage --icon assets/icon.ico --add-data "ui.html;." --add-data "fonts;fonts" --add-data "assets;assets" gommage.py
 ```
+
+Zip the `dist/Gommage` folder as `Gommage-windows.zip` for the release. `--onedir` and `--noupx` are on purpose: single-file and UPX-packed exes get flagged by antivirus far more often. For the fewest false positives, also build PyInstaller's bootloader yourself (`pip install pyinstaller --no-binary pyinstaller`, needs a C compiler) and submit each release to Microsoft as a false positive.
 
 ## Project layout
 
@@ -130,11 +132,11 @@ QR codes are on the **Support** page inside the app.
 
 ### دانلود و اجرا
 
-فایل `Gommage.exe` رو از بخش [Releases](../../releases) بگیر و اجراش کن. یه بار دسترسی ادمین می‌خواد. اگه فقط حالت پروکسی رو می‌خوای، با `--no-admin` اجراش کن.
+فایل `Gommage-windows.zip` رو از بخش [Releases](../../releases) بگیر، از حالت فشرده دربیار و `Gommage.exe` رو اجرا کن. اول بدون دسترسی ادمین (حالت پروکسی) باز می‌شه. فقط وقتی حالت کل سیستم یا مسدود کردن IPv6 رو روشن کنی، همون لحظه دسترسی ادمین می‌خواد.
 
 دفعه‌ی اول، Tor و برای حالت VPN برنامه‌ی sing-box دانلود می‌شن. **درستی هر دو قبل از اجرا با هش SHA-256 بررسی می‌شه.** اگه دانلود فیلتر بود، برنامه دقیقاً می‌گه کدوم فایل رو از راه دیگه بگیری و کجا بذاری.
 
-> **هشدار ویندوز یا آنتی‌ویروس:** فایل امضای دیجیتال نداره، برای همین ممکنه ویندوز بگه «Windows protected your PC». روی *More info ← Run anyway* بزن. بعضی آنتی‌ویروس‌ها هم به هر ابزار Tor یا VPN گیر می‌دن. ممکنه Microsoft Defender هم جلوش رو بگیره و بگه `Behavior:Win32/Impact.A!ml`. این حدسِ یادگیری ماشینیِ Defender هست، چون فایل امضا نداره، دسترسی admin می‌خواد و تنظیمات پراکسی و فایروال رو عوض می‌کنه. هشدار اشتباهه. اگه به فایل exe اعتماد نداری، از سورس اجرا کن. کل برنامه دو فایل خواناست.
+> **هشدار ویندوز یا آنتی‌ویروس:** فایل امضای دیجیتال نداره، برای همین ممکنه ویندوز بگه «Windows protected your PC». روی *More info ← Run anyway* بزن. بعضی آنتی‌ویروس‌ها هم به هر ابزار Tor یا VPN گیر می‌دن. ممکنه Microsoft Defender هم جلوش رو بگیره و بگه `Behavior:Win32/Impact.A!ml`. این حدسِ یادگیری ماشینیِ Defender هست، چون فایل امضا نداره، ممکنه دسترسی admin بخواد و تنظیمات پراکسی و فایروال رو عوض می‌کنه. هشدار اشتباهه. اگه به فایل exe اعتماد نداری، از سورس اجرا کن. کل برنامه دو فایل خواناست.
 
 ### حریم خصوصی
 

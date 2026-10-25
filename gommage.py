@@ -23,7 +23,7 @@ if WIN:
             HOME = OLD_HOME  # old copy still running and holding files; keep using its folder, move it next launch
 else:  # GOMMAGE_HOME: set by relaunch_root so the root copy keeps the user's settings
     HOME = os.environ.get("GOMMAGE_HOME") or os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "Gommage")
-VERSION = "1.1.1"  # bump with every release; the app compares it with the latest GitHub release tag
+VERSION = "1.1.2"  # bump with every release; the app compares it with the latest GitHub release tag
 REPO = "shahab7e/Gommage"
 SOCKS = 9050  # defaults; overwritten from settings by apply_ports()
 HTTP = 8118  # HTTPS CONNECT proxy: browsers resolve DNS through Tor (plain SOCKS via WinINET leaks/breaks DNS)
@@ -1235,10 +1235,4 @@ if __name__ == "__main__":
     assert newer("1.0.0", "1.0.1") and newer("1.9.0", "1.10.0") and not newer("1.1.0", "1.1.0") and not newer("2.0", "1.9")
     _id = base64.b64encode(bytes.fromhex("AB" * 20)).decode().rstrip("=")
     assert exit_relays(f"r a {_id} x\ns Exit Fast Running\nr b {_id} x\ns BadExit Exit Fast\nr c {_id} x\ns Fast") == ["AB" * 20]
-    if WIN and not is_admin() and "--no-admin" not in sys.argv:
-        # VPN mode and the IPv6 block need admin: ask once at launch instead of restarting mid-connect.
-        # --no-admin skips this (proxy mode only; toggle() still asks if VPN/IPv6 block is switched on)
-        if ctypes.windll.shell32.ShellExecuteW(None, "runas", *self_cmd(), None, 1) > 32:
-            sys.exit()
-        # UAC declined: carry on without admin (proxy mode still works; toggle() asks again for VPN)
     App().mainloop()
