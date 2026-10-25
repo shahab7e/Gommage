@@ -1,1 +1,3 @@
 pywebview>=6
+pystray; sys_platform == 'win32'
+pillow; sys_platform == 'win32'

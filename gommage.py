@@ -6,6 +6,9 @@ import random, tarfile, threading, time, urllib.request, webbrowser, zipfile
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))  # .deb install vendors pywebview here
 import webview
+if sys.platform == "win32":
+    import pystray
+    from PIL import Image
 
 WIN = sys.platform == "win32"
 if WIN:
@@ -686,9 +689,13 @@ class App:
         self.win = webview.create_window("Gommage", os.path.join(APP_DIR, "ui.html"),
                                          js_api=Api(self), width=400, height=780, min_size=(380, 740),
                                          frameless=True, easy_drag=False, background_color="#121419")
-        self.win.events.closing += self.quit_app
+        self.win.events.closing += self.on_closing
         if WIN:
             self.win.events.shown += self.round_corners
+            self.tray = pystray.Icon("Gommage", Image.open(os.path.join(APP_DIR, "assets", "icon.png")), "Gommage", pystray.Menu(
+                pystray.MenuItem("Open", lambda: self.win.show(), default=True),
+                pystray.MenuItem("Quit", self.quit_from_tray)))
+            self.tray.run_detached()
         self.win.events.loaded += lambda: self.s["autoconnect"] and self.after(500, self.toggle)
         threading.Thread(target=self.traffic, daemon=True).start()
 
@@ -1186,8 +1193,21 @@ class App:
                 except OSError:
                     pass
 
+    def on_closing(self):
+        """Windows: the close button hides the window to the tray; the tray's Quit (or a relaunch) really closes."""
+        if WIN and not self.closing:
+            self.win.hide()
+            return False
+        self.quit_app()
+
+    def quit_from_tray(self):
+        self.closing = True
+        self.win.destroy()
+
     def quit_app(self):
         self.closing = True
+        if WIN:
+            self.tray.stop()
         self.save_settings()
         self.stop()
         self.give_back()

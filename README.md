@@ -95,7 +95,7 @@ Before a release, set `VERSION` in `gommage.py` to the new tag's version (tag `v
 
 ```bash
 pip install pyinstaller
-pyinstaller --onedir --noupx --noconsole --name Gommage --icon assets/icon.ico --add-data "ui.html;." --add-data "fonts;fonts" --add-data "assets;assets" gommage.py
+pyinstaller --onedir --noupx --noconsole --name Gommage --icon assets/icon.ico --hidden-import pystray._win32 --add-data "ui.html;." --add-data "fonts;fonts" --add-data "assets;assets" gommage.py
 ```
 
 Zip the `dist/Gommage` folder as `Gommage-windows.zip` for the release. `--onedir` and `--noupx` are on purpose: single-file and UPX-packed exes get flagged by antivirus far more often. For the fewest false positives, also build PyInstaller's bootloader yourself (`pip install pyinstaller --no-binary pyinstaller`, needs a C compiler) and submit each release to Microsoft as a false positive.
