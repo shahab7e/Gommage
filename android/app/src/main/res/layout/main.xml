@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The desktop home screen laid out for a TV. Remote stops: Support (top), flags, switch, then the two pills. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- dotted world map behind the status, as on desktop -->
+    <ImageView
+        android:id="@+id/map"
+        android:layout_width="720dp"
+        android:layout_height="315dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="70dp"
+        android:importantForAccessibility="no"
+        android:scaleType="fitCenter"
+        android:src="@drawable/worldmap" />
+
+    <ImageView
+        android:layout_width="wrap_content"
+        android:layout_height="36dp"
+        android:layout_marginStart="32dp"
+        android:layout_marginTop="28dp"
+        android:adjustViewBounds="true"
+        android:contentDescription="Gommage"
+        android:src="@drawable/wordmark" />
+
+    <LinearLayout
+        android:id="@+id/support"
+        style="@style/PillBox"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="24dp"
+        android:layout_marginEnd="32dp">
+
+        <ImageView
+            android:id="@+id/supportIcon"
+            android:layout_width="16dp"
+            android:layout_height="16dp"
+            android:layout_marginEnd="8dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_heart" />
+
+        <TextView
+            android:id="@+id/supportText"
+            style="@style/PillText"
+            android:text="Support" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="74dp"
+        android:gravity="center_horizontal"
+        android:orientation="vertical">
+
+        <!-- exit country: focus it, then left/right -->
+        <LinearLayout
+            android:id="@+id/flags"
+            android:layout_width="400dp"
+            android:layout_height="72dp"
+            android:focusable="true"
+            android:gravity="center"
+            android:orientation="horizontal" />
+
+        <TextView
+            android:id="@+id/place"
+            style="@style/T"
+            android:textColor="#B8FFFFFF"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/title"
+            style="@style/T"
+            android:layout_marginTop="14dp"
+            android:fontVariationSettings="'wght' 650"
+            android:textSize="40sp" />
+
+        <TextView
+            android:id="@+id/sub"
+            style="@style/T"
+            android:layout_width="600dp"
+            android:layout_height="20dp"
+            android:layout_marginTop="6dp"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="1"
+            android:textColor="#99FFFFFF"
+            android:textSize="14sp" />
+
+        <!-- the switch, turned on its side for a wide screen, with the dotted rings below it -->
+        <FrameLayout
+            android:layout_width="400dp"
+            android:layout_height="240dp"
+            android:layout_marginTop="-46dp"
+            android:clipChildren="false">
+
+            <org.gommage.tv.Rings
+                android:id="@+id/rings"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <FrameLayout
+                android:layout_width="230dp"
+                android:layout_height="98dp"
+                android:layout_gravity="center"
+                android:background="@drawable/track"
+                android:clipChildren="false">
+
+                <TextView
+                    android:id="@+id/hint"
+                    style="@style/T"
+                    android:layout_gravity="center_vertical|end"
+                    android:layout_marginStart="24dp"
+                    android:layout_marginEnd="24dp"
+                    android:text="»"
+                    android:textColor="#8CFFFFFF"
+                    android:textSize="28sp" />
+
+                <LinearLayout
+                    android:id="@+id/knob"
+                    android:layout_width="120dp"
+                    android:layout_height="80dp"
+                    android:layout_margin="9dp"
+                    android:clickable="true"
+                    android:elevation="12dp"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="16dp">
+
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_horizontal"
+                        android:orientation="vertical">
+
+                        <View
+                            android:id="@+id/led"
+                            android:layout_width="16dp"
+                            android:layout_height="4dp"
+                            android:background="@drawable/led" />
+
+                        <TextView
+                            android:id="@+id/knobText"
+                            style="@style/T"
+                            android:layout_marginTop="7dp"
+                            android:fontVariationSettings="'wght' 700"
+                            android:letterSpacing="0.1"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <ImageView
+                        android:id="@+id/power"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:layout_marginStart="12dp"
+                        android:background="@drawable/powerwell"
+                        android:importantForAccessibility="no"
+                        android:padding="10dp"
+                        android:src="@drawable/ic_power" />
+                </LinearLayout>
+            </FrameLayout>
+        </FrameLayout>
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/log"
+        style="@style/T"
+        android:layout_width="420dp"
+        android:layout_gravity="bottom|start"
+        android:layout_margin="24dp"
+        android:fontFamily="monospace"
+        android:maxLines="3"
+        android:textColor="#4DFFFFFF"
+        android:textSize="10sp" />
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="24dp"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/identity"
+            style="@style/Pill"
+            android:layout_marginEnd="10dp"
+            android:text="New identity" />
+
+        <TextView
+            android:id="@+id/bridges"
+            style="@style/Pill"
+            android:text="Bridges" />
+    </LinearLayout>
+</FrameLayout>

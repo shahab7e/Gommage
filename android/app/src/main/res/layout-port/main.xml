@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Phones: the desktop window as it is, an upright switch whose knob slides down. Same ids as the TV layout. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <ImageView
+        android:id="@+id/map"
+        android:layout_width="match_parent"
+        android:layout_height="170dp"
+        android:layout_marginHorizontal="14dp"
+        android:layout_marginTop="120dp"
+        android:importantForAccessibility="no"
+        android:scaleType="fitCenter"
+        android:src="@drawable/worldmap" />
+
+    <ImageView
+        android:layout_width="wrap_content"
+        android:layout_height="36dp"
+        android:layout_marginStart="18dp"
+        android:layout_marginTop="40dp"
+        android:adjustViewBounds="true"
+        android:contentDescription="Gommage"
+        android:src="@drawable/wordmark" />
+
+    <LinearLayout
+        android:id="@+id/support"
+        style="@style/PillBox"
+        android:layout_height="40dp"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="38dp"
+        android:layout_marginEnd="18dp"
+        android:paddingStart="14dp"
+        android:paddingEnd="16dp">
+
+        <ImageView
+            android:layout_width="15dp"
+            android:layout_height="15dp"
+            android:layout_marginEnd="7dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_heart" />
+
+        <TextView
+            style="@style/PillText"
+            android:text="Support"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_marginTop="96dp"
+        android:gravity="center_horizontal"
+        android:orientation="vertical">
+
+        <!-- tap a flag to pick the exit country -->
+        <LinearLayout
+            android:id="@+id/flags"
+            android:layout_width="match_parent"
+            android:layout_height="72dp"
+            android:focusable="true"
+            android:gravity="center"
+            android:orientation="horizontal" />
+
+        <TextView
+            android:id="@+id/place"
+            style="@style/T"
+            android:textColor="#B8FFFFFF"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/title"
+            style="@style/T"
+            android:layout_marginTop="26dp"
+            android:fontVariationSettings="'wght' 650"
+            android:textSize="32sp" />
+
+        <TextView
+            android:id="@+id/sub"
+            style="@style/T"
+            android:layout_width="match_parent"
+            android:layout_height="34dp"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginTop="6dp"
+            android:ellipsize="end"
+            android:gravity="center_horizontal"
+            android:maxLines="2"
+            android:textColor="#99FFFFFF"
+            android:textSize="12sp" />
+
+        <!-- the switch with the dotted rings around its lower half -->
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipChildren="false">
+
+            <org.gommage.tv.Rings
+                android:id="@+id/rings"
+                android:layout_width="match_parent"
+                android:layout_height="380dp"
+                android:layout_gravity="center" />
+
+            <FrameLayout
+                android:layout_width="98dp"
+                android:layout_height="220dp"
+                android:layout_gravity="center"
+                android:background="@drawable/track"
+                android:clipChildren="false">
+
+                <TextView
+                    android:id="@+id/hint"
+                    style="@style/T"
+                    android:layout_gravity="bottom|center_horizontal"
+                    android:layout_marginTop="18dp"
+                    android:layout_marginBottom="18dp"
+                    android:rotation="90"
+                    android:text="»"
+                    android:textColor="#8CFFFFFF"
+                    android:textSize="28sp" />
+
+                <LinearLayout
+                    android:id="@+id/knob"
+                    android:layout_width="80dp"
+                    android:layout_height="118dp"
+                    android:layout_margin="9dp"
+                    android:clickable="true"
+                    android:elevation="12dp"
+                    android:focusable="true"
+                    android:gravity="center_horizontal"
+                    android:orientation="vertical"
+                    android:paddingTop="16dp">
+
+                    <View
+                        android:id="@+id/led"
+                        android:layout_width="16dp"
+                        android:layout_height="4dp"
+                        android:background="@drawable/led" />
+
+                    <TextView
+                        android:id="@+id/knobText"
+                        style="@style/T"
+                        android:layout_marginTop="10dp"
+                        android:fontVariationSettings="'wght' 700"
+                        android:letterSpacing="0.1"
+                        android:textSize="11sp" />
+
+                    <ImageView
+                        android:id="@+id/power"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:layout_marginTop="12dp"
+                        android:background="@drawable/powerwell"
+                        android:importantForAccessibility="no"
+                        android:padding="11dp"
+                        android:src="@drawable/ic_power" />
+                </LinearLayout>
+            </FrameLayout>
+        </FrameLayout>
+
+        <TextView
+            android:id="@+id/log"
+            style="@style/T"
+            android:layout_width="match_parent"
+            android:layout_marginHorizontal="20dp"
+            android:fontFamily="monospace"
+            android:maxLines="2"
+            android:textColor="#4DFFFFFF"
+            android:textSize="9sp" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="24dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/identity"
+                style="@style/Pill"
+                android:layout_marginEnd="10dp"
+                android:text="New identity" />
+
+            <TextView
+                android:id="@+id/bridges"
+                style="@style/Pill"
+                android:text="Bridges" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

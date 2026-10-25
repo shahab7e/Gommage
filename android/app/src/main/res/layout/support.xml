@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The desktop Support page, side by side for a wide screen. Left/right switches the coin. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:gravity="center"
+    android:orientation="horizontal"
+    android:padding="40dp">
+
+    <LinearLayout
+        android:layout_width="360dp"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="56dp"
+        android:orientation="vertical">
+
+        <FrameLayout
+            android:id="@+id/heart"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:background="@drawable/heartbox"
+            android:elevation="10dp">
+
+            <ImageView
+                android:layout_width="30dp"
+                android:layout_height="30dp"
+                android:layout_gravity="center"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_heart_dark" />
+        </FrameLayout>
+
+        <TextView
+            style="@style/T"
+            android:layout_marginTop="20dp"
+            android:fontVariationSettings="'wght' 700"
+            android:text="Keep Gommage free"
+            android:textSize="30sp" />
+
+        <TextView
+            style="@style/T"
+            android:layout_marginTop="12dp"
+            android:lineSpacingMultiplier="1.4"
+            android:text="Gommage is built by one person, in spare time, for people who need a way around censorship. Filtering changes all the time, and every update takes hours of work. If it got you connected, a small donation keeps it alive."
+            android:textColor="#B3FFFFFF"
+            android:textSize="15sp" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:orientation="horizontal">
+
+            <TextView style="@style/Perk" android:text="No ads" />
+            <TextView style="@style/Perk" android:text="No tracking" />
+            <TextView style="@style/Perk" android:text="No account" />
+        </LinearLayout>
+
+        <TextView
+            style="@style/T"
+            android:layout_marginTop="24dp"
+            android:text="Any amount helps. Thank you 💛"
+            android:textColor="#8E95A6"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="340dp"
+        android:layout_height="wrap_content"
+        android:gravity="center_horizontal"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/card"
+            android:orientation="horizontal"
+            android:padding="4dp">
+
+            <LinearLayout android:id="@+id/btc" style="@style/Coin">
+                <ImageView android:id="@+id/btcIcon" style="@style/CoinIcon" android:src="@drawable/ic_btc" />
+                <TextView style="@style/CoinText" android:text="Bitcoin" />
+            </LinearLayout>
+
+            <LinearLayout android:id="@+id/sol" style="@style/Coin">
+                <ImageView android:id="@+id/solIcon" style="@style/CoinIcon" android:src="@drawable/ic_sol" />
+                <TextView style="@style/CoinText" android:text="Solana" />
+            </LinearLayout>
+
+            <LinearLayout android:id="@+id/bnb" style="@style/Coin">
+                <ImageView android:id="@+id/bnbIcon" style="@style/CoinIcon" android:src="@drawable/ic_bnb" />
+                <TextView style="@style/CoinText" android:text="BNB Chain" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/card"
+            android:gravity="center_horizontal"
+            android:orientation="vertical"
+            android:padding="18dp">
+
+            <ImageView
+                android:id="@+id/qr"
+                android:layout_width="176dp"
+                android:layout_height="176dp"
+                android:background="@drawable/qrframe"
+                android:contentDescription="Wallet QR code"
+                android:elevation="8dp"
+                android:padding="12dp" />
+
+            <TextView
+                android:id="@+id/net"
+                style="@style/T"
+                android:layout_marginTop="14dp"
+                android:letterSpacing="0.05"
+                android:textColor="#8E95A6"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/addr"
+                style="@style/T"
+                android:layout_marginTop="6dp"
+                android:fontFamily="monospace"
+                android:gravity="center"
+                android:textSize="11sp" />
+
+            <TextView
+                style="@style/T"
+                android:layout_marginTop="12dp"
+                android:text="Scan with your phone's wallet app"
+                android:textColor="#3EE08F"
+                android:textSize="13sp" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

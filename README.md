@@ -5,7 +5,7 @@
   </picture>
 </h1>
 
-<p align="center">A one-tap Tor client for Windows and Linux, built for people behind heavy censorship.<br>
+<p align="center">A one-tap Tor client for Windows, Linux and Android (phones and TVs), built for people behind heavy censorship.<br>
 <a href="#فارسی">فارسی</a></p>
 
 <p align="center"><img src="docs/screenshot.png" width="320" alt="Gommage main screen"></p>
@@ -86,6 +86,17 @@ pyinstaller --onedir --noupx --noconsole --name Gommage --icon assets/icon.ico -
 
 Zip the `dist/Gommage` folder as `Gommage-windows.zip` for the release. `--onedir` and `--noupx` are on purpose: single-file and UPX-packed exes get flagged by antivirus far more often. For the fewest false positives, also build PyInstaller's bootloader yourself (`pip install pyinstaller --no-binary pyinstaller`, needs a C compiler) and submit each release to Microsoft as a false positive.
 
+## Android (phones and TVs)
+
+Download `Gommage.apk` from the `android-v…` release in [Releases](../../releases). One APK works on phones and on Android TV / Google TV, in the same look as the desktop app. On a TV, everything works with the remote: OK on the switch connects, and Up reaches the flags, where left and right change the country.
+
+It's a whole-device VPN: every app goes through Tor, including YouTube and streaming apps on a TV, with DNS through Tor and IPv6 captured so it can't leak. Bridges are tried in the same order as on desktop: yours and the last ones that worked, then the public lists (tested, fastest 15), then Tor's built-in obfs4, then Snowflake. Exit country and New identity are there too.
+
+- **Phone:** open the APK and allow installs from unknown sources if Android asks.
+- **TV:** copy the APK to a USB stick (or use *Send Files to TV*), allow unknown sources for your file manager (Settings → Device Preferences → Security & restrictions), then open and install it.
+
+The first connect asks you to allow the VPN. Android 10 or newer is recommended. It installs from Android 7, but the tunnel library is built for 10. Source and build steps are in [android/](android/README.md).
+
 ## Project layout
 
 | File | What it is |
@@ -94,6 +105,7 @@ Zip the `dist/Gommage` folder as `Gommage-windows.zip` for the release. `--onedi
 | `ui.html` | The whole interface (HTML/CSS/JS, no framework) |
 | `run.sh` | Linux launcher: sets up a venv with pywebview, then runs the app |
 | `packaging/linux/build-deb.sh` | Builds the `.deb` (GitHub Actions runs it and test-starts the app on every release) |
+| `android/` | The Android app for phones and TVs (Java, Gradle) |
 | `assets/` | Icon and donation QR codes |
 | `fonts/` | Red Hat Display (SIL OFL 1.1) |
 
@@ -119,7 +131,7 @@ QR codes are on the **Support** page inside the app.
 
 ## فارسی
 
-**Gommage** یه برنامه‌ی ساده برای وصل شدن به شبکه‌ی Tor روی ویندوز و لینوکسه، مخصوص جاهایی که فیلترینگ شدیده.
+**Gommage** یه برنامه‌ی ساده برای وصل شدن به شبکه‌ی Tor روی ویندوز، لینوکس و اندروید (گوشی و تلویزیون)ـه، مخصوص جاهایی که فیلترینگ شدیده.
 
 ### چه کار می‌کنه
 
@@ -175,6 +187,17 @@ sh run.sh
 - حالت پروکسی، پروکسی سیستم GNOME رو تنظیم می‌کنه. روی دسکتاپ‌های دیگه برنامه‌هات رو خودت روی `127.0.0.1:8118` (HTTP) یا `127.0.0.1:9050` (SOCKS5) تنظیم کن.
 - **حالت کل سیستم و مسدود کردن IPv6 دسترسی root می‌خوان.** وقتی روشنشون کنی برنامه رمزت رو می‌پرسه (pkexec) و با root دوباره باز می‌شه. می‌تونی هم از اول با `sudo -E sh run.sh` اجراش کنی.
 - توی لیست برنامه‌ها اسم برنامه‌ی لینوکسی رو بنویس، مثلاً `telegram-desktop`، نه اسم exe.
+
+### اندروید (گوشی و تلویزیون)
+
+فایل `Gommage.apk` رو از ریلیزِ `android-v…` توی بخش [Releases](../../releases) بگیر. همین یه فایل هم روی گوشی کار می‌کنه هم روی Android TV / Google TV، با همون ظاهر نسخه‌ی دسکتاپ. روی تلویزیون همه‌چیز با کنترل کار می‌کنه: OK روی دکمه وصل می‌کنه، و با بالا به پرچم‌ها می‌رسی که با چپ و راست کشور عوض می‌شه.
+
+کل دستگاه رو از Tor رد می‌کنه، حتی یوتیوب و برنامه‌های فیلم روی تلویزیون. DNS هم از Tor می‌ره و IPv6 هم بسته می‌شه که نشتی نداشته باشه. ترتیب امتحان کردن bridgeها مثل دسکتاپه: اول bridgeهای خودت و اونایی که دفعه‌ی قبل جواب دادن، بعد لیست‌های عمومی (تست می‌شن و ۱۵ تای سریع‌تر انتخاب می‌شن)، بعد obfs4 داخلی Tor و آخر سر Snowflake. انتخاب کشور خروجی و New identity هم داره.
+
+- **گوشی:** فایل رو باز کن و نصبش کن. اگه پرسید، اجازه‌ی نصب از منبع ناشناس رو بده.
+- **تلویزیون:** فایل رو با فلش (یا برنامه‌ای مثل *Send Files to TV*) به تلویزیون ببر. توی تنظیمات (Device Preferences ← Security & restrictions) اجازه‌ی نصب از منبع ناشناس رو برای فایل‌منیجر بده، بعد بازش کن و نصبش کن.
+
+بار اول که وصل می‌شی، اندروید برای VPN اجازه می‌خواد. اندروید ۱۰ به بعد پیشنهاد می‌شه. از اندروید ۷ نصب می‌شه، ولی کتابخونه‌ی تونل برای ۱۰ ساخته شده. سورس و طرز ساختش توی پوشه‌ی [android/](android/README.md) هست.
 
 ### درباره‌ی bridgeهای عمومی
 
