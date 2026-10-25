@@ -8,6 +8,8 @@
 <p align="center">A one-tap Tor client for Windows, Linux and Android (phones and TVs), built for people behind heavy censorship.<br>
 <a href="#فارسی">فارسی</a></p>
 
+<p align="center"><img src="docs/demo.gif" width="800" alt="Gommage: swipe to connect, it tests bridges and connects through Tor"></p>
+
 <p align="center"><img src="docs/screenshot.png" width="320" alt="Gommage main screen"></p>
 
 ## What it does

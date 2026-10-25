@@ -1,0 +1,153 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Gommage demo</title>
+<!-- 10 s motion graphic. Open in a browser to preview (loops); render.py seeks it frame by frame into docs/demo.gif. -->
+<style>
+@font-face { font-family: "Red Hat Display"; src: url("../../fonts/redhatdisplay.woff2") format("woff2"); font-weight: 100 900; }
+:root { --bg: #121419; --text: #f2f4f8; --muted: #8e95a6; --green: #3ee08f; --amber: #f7b955; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 960px; height: 540px; overflow: hidden; background: var(--bg); color: var(--text);
+  font: 16px/1.3 "Red Hat Display", "Segoe UI", sans-serif; }
+.stage { position: absolute; inset: 0; overflow: hidden;
+  background: radial-gradient(70% 60% at 30% 0%, rgba(62,224,143,.10), transparent 70%),
+              radial-gradient(1.2px 1.2px at 50% 50%, rgba(255,255,255,.07) 99%, transparent) 0 0 / 18px 18px, var(--bg); }
+.abs { position: absolute; }
+
+/* scene 1 + 3: logo */
+.logo { left: 0; right: 0; top: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; }
+.logo .row { display: flex; align-items: center; gap: 18px; }
+.logo svg { width: 120px; height: 120px; }
+.logo svg path { stroke-dasharray: 600; }
+.logo .word { font-size: 76px; font-weight: 600; letter-spacing: -1px; }
+.logo .tag { font-size: 22px; color: var(--muted); }
+.logo .tag b { color: var(--text); font-weight: 600; }
+.logo .meta { display: flex; gap: 10px; }
+.pill { padding: 7px 14px; border-radius: 99px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08); font-size: 15px; color: var(--text); }
+.url { font-size: 18px; color: var(--green); font-weight: 600; letter-spacing: .2px; }
+
+/* scene 2: phone mockup */
+.phone { left: 120px; top: 30px; width: 250px; height: 480px; border-radius: 32px; overflow: hidden;
+  border: 1px solid rgba(255,255,255,.12); box-shadow: 0 30px 80px rgba(0,0,0,.55); }
+.sky { position: absolute; inset: 0; }
+.sky.idle { background: linear-gradient(180deg, #353949, #22242d); }
+.sky.busy { background: linear-gradient(180deg, #4a4535, #2b2822); }
+.sky.on   { background: radial-gradient(80% 55% at 25% 0%, rgba(255,255,255,.12), transparent 70%), linear-gradient(180deg, #5d8e78, #3b6453); }
+.ph-head { left: 18px; top: 18px; display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: 17px; }
+.ph-head svg { width: 22px; height: 22px; }
+.flag { left: 0; right: 0; top: 62px; display: flex; flex-direction: column; align-items: center; gap: 5px; font-size: 12px; color: rgba(255,255,255,.75); }
+.flag img { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid rgba(255,255,255,.85); }
+.status { left: 0; right: 0; top: 140px; text-align: center; font-size: 26px; font-weight: 600; }
+.status span { position: absolute; left: 0; right: 0; }
+.sub { left: 0; right: 0; top: 178px; text-align: center; font-size: 12.5px; color: rgba(255,255,255,.7); }
+.track { left: 85px; top: 206px; width: 80px; height: 180px; border-radius: 40px; background: rgba(0,0,0,.28); }
+.knob { left: 6px; width: 68px; height: 100px; border-radius: 34px; background: linear-gradient(180deg, #4a4e5c, #33363f);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 10px; font-weight: 700; letter-spacing: 1px; box-shadow: 0 8px 20px rgba(0,0,0,.35); }
+.knob .led { width: 16px; height: 3px; border-radius: 2px; }
+.knob .pw { width: 30px; height: 30px; border-radius: 50%; background: rgba(0,0,0,.3); display: grid; place-items: center; }
+.bars { left: 22px; right: 22px; top: 400px; display: flex; flex-direction: column; gap: 6px; font-size: 11.5px; }
+.bar { display: flex; justify-content: space-between; padding: 6px 10px; border-radius: 9px; background: rgba(0,0,0,.22); }
+.bar i { font-style: normal; color: var(--green); font-weight: 700; }
+
+/* scene 2: callouts */
+.call { left: 440px; width: 440px; }
+.call .k { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: var(--green); font-weight: 700; margin-bottom: 6px; }
+.call .h { font-size: 30px; font-weight: 600; line-height: 1.15; }
+.call .d { font-size: 16px; color: var(--muted); margin-top: 6px; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <!-- scene 1: logo draw -->
+  <div class="abs logo" id="s1">
+    <div class="row">
+      <svg viewBox="0 0 256 256"><g fill="none" stroke="#3ee08f" stroke-width="16" stroke-linecap="round">
+        <path id="a1" d="M187.4 68.6A84 84 0 1 0 212 128" stroke="#24935c"/>
+        <path id="a2" d="M169 87A58 58 0 1 0 186 128" stroke="#31b976"/>
+        <path id="a3" d="M150.6 105.4A32 32 0 1 0 160 128"/>
+        <path id="a4" d="M128 128H212"/></g></svg>
+      <div class="word" id="w1">Gommage</div>
+    </div>
+    <div class="tag" id="t1"><b>One tap</b> to reach Tor, even where it's blocked.</div>
+  </div>
+
+  <!-- scene 2: app demo -->
+  <div class="abs phone" id="ph">
+    <div class="sky idle"></div><div class="sky busy" id="busy"></div><div class="sky on" id="on"></div>
+    <div class="abs ph-head"><svg viewBox="0 0 256 256"><g fill="none" stroke="#3ee08f" stroke-width="22" stroke-linecap="round"><path d="M187.4 68.6A84 84 0 1 0 212 128" stroke="#24935c"/><path d="M169 87A58 58 0 1 0 186 128" stroke="#31b976"/><path d="M150.6 105.4A32 32 0 1 0 160 128"/><path d="M128 128H212"/></g></svg>Gommage</div>
+    <div class="abs flag"><img src="../../assets/flags/nl.svg" alt=""><span>Netherlands</span></div>
+    <div class="abs status"><span id="st0">Not Connected</span><span id="st1">Connecting…</span><span id="st2">Connected</span></div>
+    <div class="abs sub" id="sub">Swipe down to connect</div>
+    <div class="abs track"><div class="abs knob" id="knob"><div class="led" id="led"></div><span id="kl">START</span>
+      <div class="pw"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 7.2a8 8 0 1 0 11.4 0"/></svg></div></div></div>
+    <div class="abs bars">
+      <div class="bar" id="b1"><span>webtunnel · 182 ms</span><i>✓</i></div>
+      <div class="bar" id="b2"><span>obfs4 · 240 ms</span><i>✓</i></div>
+    </div>
+  </div>
+  <div class="abs call" id="c1" style="top:110px"><div class="k">Bridges</div><div class="h">Finds a bridge that works</div><div class="d">webtunnel, obfs4, Snowflake, meek. Fastest first.</div></div>
+  <div class="abs call" id="c2" style="top:225px"><div class="k">Whole system</div><div class="h">Telegram, games, every app</div><div class="d">VPN mode via sing-box, or a simple proxy.</div></div>
+  <div class="abs call" id="c3" style="top:340px"><div class="k">Private</div><div class="h">No account. No telemetry.</div><div class="d">Open source. Downloads are hash-checked.</div></div>
+
+  <!-- scene 3: end card -->
+  <div class="abs logo" id="s3">
+    <div class="row">
+      <svg viewBox="0 0 256 256"><g fill="none" stroke="#3ee08f" stroke-width="16" stroke-linecap="round"><path d="M187.4 68.6A84 84 0 1 0 212 128" stroke="#24935c"/><path d="M169 87A58 58 0 1 0 186 128" stroke="#31b976"/><path d="M150.6 105.4A32 32 0 1 0 160 128"/><path d="M128 128H212"/></g></svg>
+      <div class="word">Gommage</div>
+    </div>
+    <div class="meta" id="m3"><span class="pill">Windows</span><span class="pill">Linux</span><span class="pill">Android &amp; TV</span></div>
+    <div class="url" id="u3">github.com/shahab7e/Gommage</div>
+  </div>
+</div>
+
+<script>
+const D = 10, $ = id => document.getElementById(id);
+const clamp = x => Math.max(0, Math.min(1, x));
+const ease = x => 1 - Math.pow(1 - x, 3);                       // ease-out cubic
+const p = (t, a, b) => ease(clamp((t - a) / (b - a)));          // eased progress of [a, b]
+const io = (t, a, b, c, d) => Math.min(p(t, a, b), 1 - p(t, c, d)); // fade in a→b, out c→d
+function show(el, o, dy = 0, s = 1) { el.style.opacity = o; el.style.transform = `translateY(${dy}px) scale(${s})`; }
+
+function seek(t) {
+  // scene 1: logo arcs draw in, word + tagline rise, all out by 2.8
+  [["a1", 0.0], ["a2", 0.15], ["a3", 0.3], ["a4", 0.55]].forEach(([id, d]) => $(id).style.strokeDashoffset = 600 * (1 - p(t, d, d + 0.9)));
+  const out1 = 1 - p(t, 2.4, 2.8);
+  show($("s1"), out1, 0, 1 - 0.05 * p(t, 2.4, 2.8));
+  show($("w1"), p(t, 0.6, 1.2), 14 * (1 - p(t, 0.6, 1.2)));
+  show($("t1"), p(t, 1.1, 1.7), 14 * (1 - p(t, 1.1, 1.7)));
+
+  // scene 2: phone slides in, user swipes, bridges test, connects
+  const ph = io(t, 2.6, 3.2, 8.1, 8.5);
+  show($("ph"), ph, 40 * (1 - p(t, 2.6, 3.2)));
+  const swipe = p(t, 3.6, 4.2);
+  $("knob").style.top = (6 + 68 * swipe) + "px";
+  const busy = p(t, 4.1, 4.4) * (1 - p(t, 6.2, 6.6)), on = p(t, 6.2, 6.7);
+  $("busy").style.opacity = busy; $("on").style.opacity = on;
+  $("st0").style.opacity = 1 - p(t, 4.0, 4.3);
+  $("st1").style.opacity = p(t, 4.0, 4.3) * (1 - p(t, 6.2, 6.5));
+  $("st2").style.opacity = p(t, 6.2, 6.5);
+  const dots = ".".repeat(1 + Math.floor(t * 3) % 3);
+  $("sub").textContent = t < 4.1 ? "Swipe down to connect" : t < 6.3 ? "Testing bridges" + dots : "via webtunnel · 182 ms";
+  $("led").style.background = t < 4.1 ? "#3ee08f" : t < 6.3 ? "#f7b955" : "#3ee08f";
+  $("kl").textContent = t < 4.1 ? "START" : t < 6.3 ? "WAIT" : "ON";
+  show($("b1"), p(t, 4.8, 5.1), 8 * (1 - p(t, 4.8, 5.1)));
+  show($("b2"), p(t, 5.4, 5.7), 8 * (1 - p(t, 5.4, 5.7)));
+  [["c1", 3.5], ["c2", 5.0], ["c3", 6.5]].forEach(([id, a]) => show($(id), io(t, a, a + 0.5, 8.1, 8.5), 16 * (1 - p(t, a, a + 0.5))));
+
+  // scene 3: end card, fades to background at the very end so the loop is clean
+  const in3 = io(t, 8.4, 8.9, 9.7, 10);
+  show($("s3"), in3, 0, 0.96 + 0.04 * p(t, 8.4, 8.9));
+  show($("m3"), p(t, 8.7, 9.1), 10 * (1 - p(t, 8.7, 9.1)));
+  show($("u3"), p(t, 8.9, 9.3), 10 * (1 - p(t, 8.9, 9.3)));
+}
+window.seek = seek;
+seek(0);
+// live preview loop; render.py sets ?render to drive seek() itself
+if (!location.search.includes("render")) {
+  const t0 = performance.now();
+  (function loop(now) { seek(((now - t0) / 1000) % D); requestAnimationFrame(loop); })(t0);
+}
+</script>
+</body>
+</html>
