@@ -224,7 +224,9 @@ def ensure_tor(log):
             tarfile.open(fileobj=io.BytesIO(data)).extractall(HOME, filter="data")
             return found
     # 2) download, trying mirrors
-    for u in (URL, URL.replace("dist.", "archive.").replace("/torbrowser/", "/tor-package-archive/torbrowser/")):
+    # the last mirror is our own copy of the same file; it's accepted only if it matches the pinned hash
+    for u in (URL, URL.replace("dist.", "archive.").replace("/torbrowser/", "/tor-package-archive/torbrowser/"),
+              f"https://github.com/{REPO}/releases/download/tor-{VER}/{os.path.basename(URL)}"):
         try:
             log(f"Downloading {u}")
             data = urllib.request.urlopen(u, timeout=60).read()
