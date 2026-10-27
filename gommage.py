@@ -67,6 +67,15 @@ def kill_tree(proc):
             pass
 
 
+def kill_stale_tor():
+    """A tor.exe/lyrebird.exe left from a crashed run holds 9050 and every attempt then dies on bind. Only ours (under HOME)."""
+    if WIN:
+        names = ",".join(f"'{p}'" for p in TOR_PROCS)
+        run("powershell", "-NoProfile", "-Command",
+            f"Get-CimInstance Win32_Process | ? {{ $_.Name -in {names} -and $_.ExecutablePath -like '{HOME}\\*' }} "
+            "| % { Stop-Process -Id $_.ProcessId -Force }")
+
+
 def run(*cmd, input=None):
     try:
         return subprocess.run(cmd, capture_output=True, text=True, creationflags=NOFLASH, input=input)
@@ -1006,6 +1015,8 @@ class App:
             if self.s["block_ipv6"]:
                 block_ipv6(True)
                 self.log("IPv6 blocked (firewall rule)")
+            kill_stale_tor()
+            self.port_busy = False
             tor, pt = ensure_tor(self.log)
             self.log(f"tor: {tor}, transports: {pt}")
             builtin = builtin_bridges()
@@ -1018,6 +1029,9 @@ class App:
                     return  # connected, then the user disconnected (finally: stop)
                 if self.cancelled:
                     return
+                if self.port_busy:
+                    return self.status(f"Error: port {SOCKS}/{HTTP} is in use by another program (Tor Browser? "
+                                       "another VPN?). Close it or change the ports in Settings", "red")
                 self.log("last working bridges failed - testing the rest")
             if not lines:  # no bridges configured: plain Tor
                 tiers = [("direct Tor", [])]
@@ -1044,6 +1058,10 @@ class App:
                 if self.run_tor(tor, pt, tier, vpn, cc, f"{name}, {n}/{len(tiers)}"):
                     break  # it connected; returned because the user disconnected or Tor died
                 if self.cancelled:
+                    break
+                if self.port_busy:
+                    self.status(f"Error: port {SOCKS}/{HTTP} is in use by another program (Tor Browser? "
+                                "another VPN?). Close it or change the ports in Settings", "red")
                     break
             else:
                 self.status("Error: no bridge worked (add fresh bridges in Settings)", "red")
@@ -1086,6 +1104,8 @@ class App:
 
         for l in proc.stdout:
             self.log(l)
+            if "WSAEADDRINUSE" in l or "Address already in use" in l:
+                self.port_busy = True  # not a bridge problem: another program owns the port
             m = re.search(r"Bootstrapped (\d+)%", l)
             if not m:
                 continue
