@@ -74,6 +74,11 @@ public class MainActivity extends Activity {
         identity = findViewById(R.id.identity);
         log = findViewById(R.id.log);
         title.setShadowLayer(dp(20), 0, dp(4), 0x40000000);
+        // Android 15+ draws under the navigation bar: keep the sky there but lift the buttons above it
+        root.setOnApplyWindowInsetsListener((v, in) -> {
+            v.setPadding(in.getSystemWindowInsetLeft(), 0, in.getSystemWindowInsetRight(), in.getSystemWindowInsetBottom());
+            return in;
+        });
         tall = getResources().getConfiguration().orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT;
         if (tall) rings.setTrack(98, 220);
 
@@ -111,6 +116,8 @@ public class MainActivity extends Activity {
         });
         identity.setOnClickListener(v -> GommageVpn.newIdentity());
         findViewById(R.id.bridges).setOnClickListener(v -> editBridges());
+        findViewById(R.id.logs).setOnClickListener(v -> showLog());
+        log.setOnClickListener(v -> showLog());
         findViewById(R.id.support).setOnClickListener(v -> startActivity(new Intent(this, SupportActivity.class)));
         knob.requestFocus(); // OK on the remote connects straight away
     }
@@ -122,12 +129,77 @@ public class MainActivity extends Activity {
         e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         e.setMinLines(3);
         e.setTextSize(13);
-        new AlertDialog.Builder(this)
+        AlertDialog d = new AlertDialog.Builder(this)
                 .setTitle("Your bridges")
                 .setMessage("One per line. They're tried first on the next connect. Without them, Gommage finds public bridges itself.")
                 .setView(e)
-                .setPositiveButton("Save", (d, w) -> prefs.edit().putString("bridges", e.getText().toString()).apply())
-                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Save", (x, w) -> prefs.edit().putString("bridges", e.getText().toString()).apply())
+                .setNeutralButton("Get new", null)
+                .setNegativeButton("Test", null)
+                .show();
+        // Test and Get new keep the dialog open; the result lands in the box, Save keeps it
+        d.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v -> {
+            List<String> lines = Bridges.clean(e.getText().toString());
+            d.setMessage("Testing " + lines.size() + " bridges…");
+            new Thread(() -> {
+                List<String> keep = Bridges.fastest(lines, java.util.Collections.emptyMap(), lines.size());
+                int ok = keep.size(), skip = 0;
+                for (String l : lines) if (Bridges.target(l) == null) { keep.add(l); skip++; } // snowflake/meek can't be probed
+                int dead = lines.size() - keep.size();
+                for (String l : lines) GommageVpn.note((keep.contains(l) ? "OK    " : "DROP  ") + l.substring(0, Math.min(90, l.length())));
+                String msg = ok + " ok · " + dead + " dead or duplicate · " + skip + " untested"
+                        + (dead > 0 ? "\nThe dead ones are out of the box, Save to keep it that way." : "");
+                runOnUiThread(() -> {
+                    if (dead > 0) e.setText(String.join("\n", keep));
+                    d.setMessage(msg);
+                });
+            }).start();
+        });
+        d.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
+            List<String> cur = Bridges.clean(e.getText().toString());
+            d.setMessage("Looking for fresh bridges…");
+            new Thread(() -> {
+                java.util.Map<String, Integer> pub = Bridges.fetchPublic(GommageVpn::note);
+                pub.keySet().removeAll(cur);
+                runOnUiThread(() -> d.setMessage(pub.isEmpty() ? "No new bridges found. Check your connection."
+                        : "Testing " + pub.size() + " bridges…"));
+                if (pub.isEmpty()) return;
+                List<String> pick = Bridges.fastest(new ArrayList<>(pub.keySet()), pub, 15);
+                runOnUiThread(() -> {
+                    if (!pick.isEmpty()) {
+                        List<String> all = new ArrayList<>(pick);
+                        all.addAll(cur);
+                        e.setText(String.join("\n", all));
+                    }
+                    d.setMessage(pick.isEmpty() ? "None of the new bridges are reachable right now."
+                            : pick.size() + " new bridges added at the top. Save to keep them.");
+                });
+            }).start();
+        });
+    }
+
+    /** The whole log, like the desktop app's Logs tab. */
+    private void showLog() {
+        String text;
+        synchronized (GommageVpn.log) {
+            text = String.join("\n", GommageVpn.log);
+        }
+        TextView t = new TextView(this);
+        t.setText(text.isEmpty() ? "Nothing yet." : text);
+        t.setTextIsSelectable(true);
+        t.setTypeface(android.graphics.Typeface.MONOSPACE);
+        t.setTextSize(11);
+        t.setPadding(dp(20), dp(8), dp(20), dp(8));
+        android.widget.ScrollView s = new android.widget.ScrollView(this);
+        s.addView(t);
+        s.post(() -> s.fullScroll(View.FOCUS_DOWN));
+        String all = text;
+        new AlertDialog.Builder(this)
+                .setTitle("Log")
+                .setView(s)
+                .setPositiveButton("Close", null)
+                .setNeutralButton("Copy", (x, w) -> ((android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE))
+                        .setPrimaryClip(android.content.ClipData.newPlainText("Gommage log", all)))
                 .show();
     }
 
