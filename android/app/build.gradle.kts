@@ -11,8 +11,8 @@ android {
         applicationId = "org.gommage.tv"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.0.1"
         // TVs are ARM; `-Pabis=x86_64` builds for the emulator
         ndk { abiFilters += (project.findProperty("abis") as String? ?: "arm64-v8a,armeabi-v7a").split(",") }
     }
