@@ -26,7 +26,7 @@ if WIN:
             HOME = OLD_HOME  # old copy still running and holding files; keep using its folder, move it next launch
 else:  # GOMMAGE_HOME: set by relaunch_root so the root copy keeps the user's settings
     HOME = os.environ.get("GOMMAGE_HOME") or os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "Gommage")
-VERSION = "1.1.3"  # bump with every release; the app compares it with the latest GitHub release tag
+VERSION = "1.1.4"  # bump with every release; the app compares it with the latest GitHub release tag
 REPO = "shahab7e/Gommage"
 SOCKS = 9050  # defaults; overwritten from settings by apply_ports()
 HTTP = 8118  # HTTPS CONNECT proxy: browsers resolve DNS through Tor (plain SOCKS via WinINET leaks/breaks DNS)
@@ -124,6 +124,20 @@ def db(sql, args=()):
 
 def now():
     return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def free_port(p, taken=(), kind=socket.SOCK_STREAM):
+    """First port >= p that nothing holds (and isn't in `taken`)."""
+    while p < 65535:
+        if p not in taken:
+            try:
+                with socket.socket(socket.AF_INET, kind) as sk:
+                    sk.bind((LISTEN, p))
+                return p
+            except OSError:
+                pass
+        p += 1
+    return p
 
 
 def apply_ports(listen, socks, http):
@@ -1017,6 +1031,14 @@ class App:
                 self.log("IPv6 blocked (firewall rule)")
             kill_stale_tor()
             self.port_busy = False
+            global SOCKS, HTTP, DNS_PORT  # busy port (Tor Browser, another proxy...) -> use the next free one for this session
+            old = (SOCKS, HTTP, DNS_PORT)
+            SOCKS = free_port(SOCKS)
+            HTTP = free_port(HTTP, (SOCKS,))
+            if vpn:
+                DNS_PORT = free_port(DNS_PORT, (), socket.SOCK_DGRAM)
+            if old != (SOCKS, HTTP, DNS_PORT):
+                self.log(f"ports busy, using SOCKS {SOCKS}, HTTP {HTTP}, DNS {DNS_PORT} instead of {old}")
             tor, pt = ensure_tor(self.log)
             self.log(f"tor: {tor}, transports: {pt}")
             builtin = builtin_bridges()
