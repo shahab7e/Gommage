@@ -10,7 +10,7 @@ APP="$ROOT/opt/gommage"
 
 mkdir -p "$APP/lib" "$ROOT/usr/bin" "$ROOT/usr/share/applications" "$ROOT/usr/share/icons/hicolor/256x256/apps" \
          "$ROOT/usr/share/doc/gommage" "$ROOT/DEBIAN"
-cp gommage.py ui.html "$APP/"
+cp gommage.py split_engine.py killswitch.py ui.html "$APP/"
 cp -r fonts assets "$APP/"
 rm -rf "$APP/assets/logo"            # design sources; the app only uses the wordmark below
 mkdir -p "$APP/assets/logo"
@@ -48,7 +48,7 @@ Priority: optional
 Architecture: amd64
 Maintainer: Gommage <190859988+shahab7e@users.noreply.github.com>
 Depends: python3 (>= 3.10), python3-gi, gir1.2-gtk-3.0, gir1.2-webkit2-4.1 | gir1.2-webkit2-4.0, policykit-1 | pkexec
-Recommends: nftables
+Recommends: nftables, iproute2
 Homepage: https://github.com/shahab7e/Gommage
 Description: One-tap Tor client built for heavy censorship
  Connects to Tor through bridges (your own, public lists, Tor's built-ins),
@@ -63,6 +63,26 @@ command -v update-desktop-database >/dev/null && update-desktop-database -q /usr
 command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
 EOF
 chmod 755 "$ROOT/DEBIAN/postinst"
+
+cat > "$ROOT/DEBIAN/prerm" <<'EOF'
+#!/bin/sh
+set -e
+case "$1" in
+  remove|purge)
+    systemctl disable --now gommage-killswitch.service 2>/dev/null || true
+    rm -f /etc/systemd/system/gommage-killswitch.service /etc/gommage-killswitch.nft
+    systemctl daemon-reload 2>/dev/null || true
+    nft delete table inet gommage_ks 2>/dev/null || true
+    for tool in iptables ip6tables; do
+      command -v "$tool" >/dev/null || continue
+      while "$tool" -D OUTPUT -j GOMMAGE_KS 2>/dev/null; do :; done
+      "$tool" -F GOMMAGE_KS 2>/dev/null || true
+      "$tool" -X GOMMAGE_KS 2>/dev/null || true
+    done
+    ;;
+esac
+EOF
+chmod 755 "$ROOT/DEBIAN/prerm"
 
 find "$ROOT" -type d -exec chmod 755 {} +
 find "$ROOT/opt" -type f -exec chmod 644 {} +

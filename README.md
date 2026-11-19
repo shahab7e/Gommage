@@ -19,19 +19,31 @@ Gommage connects you to the Tor network through **bridges**, which are relays th
 - **One tap to connect.** It tries your bridges fastest-first, then public bridge lists, then Tor's built-in bridges.
 - **It remembers what worked.** The bridge that connected last time is tried first, and every bridge builds up a success record that decides the order.
 - **Fresh bridges.** It pulls community bridge lists from GitHub (with a jsDelivr mirror), checks they are well-formed, tests them in parallel and keeps the fastest. Bridges listed by more than one source rank higher.
-- **Whole-system mode (VPN).** Routes every app, including Telegram and games, through Tor using [sing-box](https://github.com/SagerNet/sing-box). Split tunnelling lets you pick which apps use Tor and send Iranian IPs or chosen domains direct.
+- **Whole-system mode (VPN).** Routes every app, including Telegram and games, through Tor using [sing-box](https://github.com/SagerNet/sing-box). Advanced split tunnelling lets you pick per-app actions (`Tor Strict`, `Tor`, `Direct`, `Block`) by executable path, folder, or name, add domain/IP/port rules, inspect live connections, and run a 4-point Leak Audit.
+- **OS-level Kill Switch (Windows & Linux).** Fail-closed Windows Filtering Platform (WFP) and Linux `nftables` + `cgroup v2` firewall rules lock selected sensitive apps (`Strict Apps Only`) or the entire PC (`Whole System`) so zero traffic or DNS leaks if Tor or the tunnel drops. Optional **Persistent Lock** survives disconnects and reboots until you click **Unlock** or run `gommage --unlock-killswitch`.
 - **Proxy mode.** A system HTTP proxy plus SOCKS5. You can share it with phones on your Wi-Fi.
 - **"Can't open Gemini?" button** (Windows and Linux). Google blocks many Tor exits for Gemini and NotebookLM. One tap searches for an exit Google accepts and pins it, and the button shows the progress and "Gemini unblocked ✓". *New identity* undoes it.
-- **Tray (Windows).** The close button hides Gommage to the tray and keeps the connection up. Right-click the tray icon for *Open* or *Quit*.
+- **Tray (Windows).** The close button hides Gommage to the tray and keeps the connection up. Right-click the tray icon for *Open*, *Unlock Kill Switch*, or *Quit*.
 - **Exit country**, live speed, new identity, IPv6 leak blocking and connection history.
+
+## Split tunnelling & Kill Switch
+
+- **Per-app actions (`Tor Strict 🔒`, `Tor`, `Direct`, `Block`).** Match apps by exact executable path, folder, or process name using the built-in **App Picker** (scans live running processes and installed apps on both Windows and Linux).
+- **Domain, IP/CIDR & port rules.** Add domain suffixes, exact domains, keywords, CIDR subnets, ports/port ranges, or bulk direct lists, combine them with built-in **Presets** (`Bypass Iran (.ir)`, `Anti-Leak Shield` blocking WebRTC/STUN/mDNS/DoT leaks, and `Block Telemetry`), save/switch **Profiles**, Import/Export JSON, and verify precedence before connecting with the **Rule Tester**.
+- **Live Monitor & Leak Audit.** Inspect real-time per-app connections over the authenticated loopback `clash_api`, switch an app's route or click **Kill Connection** immediately, reload rules without tearing down Tor via **Apply Live**, and run the 4-point **Leak Audit** across firewall, tunnel isolation, DNS/IPv6/WebRTC seal, and Strict App Jail integrity.
+- **OS-level Fail-Closed Kill Switch (network blocking only).** Choose `Strict Apps Only` (locks `Tor Strict` apps at the OS kernel level) or `Whole System` (locks all non-Tor/non-TUN traffic). Powered by **Windows Filtering Platform (WFP)** dual-handle rules on Windows and **`nftables` (`table inet gommage_ks`) + `skgid` + `cgroup v2` (`gommage_jail` + ▶ Launch Protected)** on Linux, with no forced app termination.
+- **Unlocking Persistent Lock.** When **Persistent Lock** is enabled, the firewall stays locked across disconnects and reboots until you unlock it via:
+  1. The red **Unlock** banner on the Home screen or the **Kill Switch** toggle in Settings,
+  2. *Unlock Kill Switch* in the Windows tray menu,
+  3. Headless CLI recovery: `Gommage.exe --unlock-killswitch` (Windows) or `sudo gommage --unlock-killswitch` (Linux), or the raw OS commands documented in the auto-generated `UNLOCK-KILLSWITCH.txt` recovery guide.
 
 ## Download
 
-Get `Gommage-windows.zip` from [Releases](../../releases), unzip it, and run `Gommage.exe`. It starts without administrator rights (proxy mode). Turning on whole-system mode or the IPv6 block asks for them at that moment.
+Get `Gommage-windows.zip` from [Releases](../../releases), unzip it, and run `Gommage.exe`. It starts without administrator rights (proxy mode). Turning on whole-system mode, the Kill Switch, or the IPv6 block asks for them at that moment.
 
 On first connect it downloads the Tor Expert Bundle and, if you use whole-system mode, sing-box. **Both are checked against a SHA-256 hash before they run.** If the download is blocked, the app tells you the exact file to fetch another way and where to put it.
 
-> **Windows SmartScreen / antivirus:** the exe isn't code-signed, so Windows may warn "Windows protected your PC". Click *More info → Run anyway*. Some antivirus tools flag any Tor or VPN tool. Microsoft Defender may block it as `Behavior:Win32/Impact.A!ml`: that's a machine-learning guess, set off by an unsigned exe that can ask for admin and changes proxy and firewall settings. It's a false positive. If you'd rather not trust a binary, run it from source (below). It's two readable files.
+> **Windows SmartScreen / antivirus:** the exe isn't code-signed, so Windows may warn "Windows protected your PC". Click *More info → Run anyway*. Some antivirus tools flag any Tor or VPN tool. Microsoft Defender may block it as `Behavior:Win32/Impact.A!ml`: that's a machine-learning guess, set off by an unsigned exe that can ask for admin and changes proxy and firewall settings. It's a false positive. If you'd rather not trust a binary, run it from source (below). It's four readable files (`gommage.py`, `split_engine.py`, `killswitch.py`, `ui.html`).
 
 ## How it compares
 
@@ -71,7 +83,7 @@ Requires Windows 10/11 with the WebView2 runtime (preinstalled on Windows 11). R
 **Debian / Ubuntu (22.04 or newer):** download `gommage_*_amd64.deb` from [Releases](../../releases) and install it:
 
 ```bash
-sudo apt install ./gommage_1.1.1_amd64.deb
+sudo apt install ./gommage_1.2.0_amd64.deb
 ```
 
 Then open **Gommage** from your app menu, or run `gommage`. Remove it with `sudo apt remove gommage`. On first connect it downloads Tor's own bundle (hash-checked), which includes webtunnel and Tor's built-in bridges.
@@ -88,8 +100,8 @@ sh run.sh
 - **Tor:** if `tor` and `lyrebird` (or `obfs4proxy`) are installed, Gommage uses them. Otherwise it downloads the Linux Tor Expert Bundle and checks it against Tor Project's published SHA-256 list. The bundle also brings Tor's built-in bridges; distro packages don't have them, so with system Tor use your own or the public bridge lists. obfs4proxy only speaks obfs4; for webtunnel install `lyrebird`.
 - **Port clash:** a running `tor` service already holds port 9050. Stop it (`sudo systemctl disable --now tor`) or pick another SOCKS port in Settings.
 - **Proxy mode** sets the GNOME system proxy (`gsettings`), which GNOME apps, Chrome and Firefox (with "Use system proxy settings") follow. On other desktops point your apps at the HTTP proxy `127.0.0.1:8118` or SOCKS5 `127.0.0.1:9050` yourself.
-- **Whole-system mode and the IPv6 block need root.** When you turn them on, Gommage asks for your password (pkexec) and reopens as root; or start it with `sudo -E sh run.sh`. sing-box is downloaded through Tor and checked against its SHA-256. The IPv6 block uses nftables (or ip6tables).
-- **Split tunnelling** matches Linux program names, e.g. `telegram-desktop` or `firefox`, not `.exe` names.
+- **Whole-system mode, Kill Switch, and the IPv6 block need root.** When you turn them on, Gommage asks for your password (pkexec) and reopens as root; or start it with `sudo -E sh run.sh`. sing-box is downloaded through Tor and checked against its SHA-256. Per-app Kill Switch uses `nftables` + `cgroup v2` (**▶ Launch Protected** to start apps directly inside `gommage_jail`) and falls back to `iptables` for whole-system mode; `sudo apt remove gommage` automatically removes any active Kill Switch firewall rules and systemd unit.
+- **Split tunnelling** discovers Linux applications from `.desktop` launchers and `/proc` (flagging Flatpak/Snap sandboxed apps) and matches by executable path, folder, or process name (e.g. `telegram-desktop` or `firefox`, not `.exe` names).
 
 ### Build the exe
 
@@ -97,7 +109,7 @@ Before a release, set `VERSION` in `gommage.py` to the new tag's version (tag `v
 
 ```bash
 pip install pyinstaller
-pyinstaller --onedir --noupx --noconsole --name Gommage --icon assets/icon.ico --hidden-import pystray._win32 --add-data "ui.html;." --add-data "fonts;fonts" --add-data "assets;assets" gommage.py
+pyinstaller --onedir --noupx --noconsole --name Gommage --icon assets/icon.ico --hidden-import pystray._win32 --hidden-import split_engine --hidden-import killswitch --add-data "ui.html;." --add-data "fonts;fonts" --add-data "assets;assets" gommage.py
 ```
 
 Zip the `dist/Gommage` folder as `Gommage-windows.zip` for the release. `--onedir` and `--noupx` are on purpose: single-file and UPX-packed exes get flagged by antivirus far more often. For the fewest false positives, also build PyInstaller's bootloader yourself (`pip install pyinstaller --no-binary pyinstaller`, needs a C compiler) and submit each release to Microsoft as a false positive.
@@ -117,7 +129,9 @@ The first connect asks you to allow the VPN. Android 10 or newer is recommended.
 
 | File | What it is |
 |---|---|
-| `gommage.py` | Everything that isn't drawing: Tor/sing-box control, bridge discovery and ranking, settings, window |
+| `gommage.py` | Tor control, bridge discovery and ranking, tunnel lifecycle, window |
+| `split_engine.py` | Split tunnelling schema, app discovery, sing-box 1.11 rule/DNS compiler, live monitor client |
+| `killswitch.py` | Windows WFP & Linux nftables/cgroup v2 fail-closed Kill Switch and `--unlock-killswitch` CLI |
 | `ui.html` | The whole interface (HTML/CSS/JS, no framework) |
 | `run.sh` | Linux launcher: sets up a venv with pywebview, then runs the app |
 | `packaging/linux/build-deb.sh` | Builds the `.deb` (GitHub Actions runs it and test-starts the app on every release) |
@@ -154,19 +168,31 @@ QR codes are on the **Support** page inside the app.
 - **اتصال با یه لمس.** اول bridgeهای خودت رو از سریع‌ترین امتحان می‌کنه، بعد لیست‌های عمومی و آخر هم bridgeهای داخلی Tor رو.
 - **یادش می‌مونه.** bridgeای که دفعه‌ی قبل وصل شده اول امتحان می‌شه. هر bridge هم یه سابقه‌ی موفقیت داره که ترتیب امتحان کردن رو تعیین می‌کنه.
 - **bridge تازه.** لیست‌های عمومی bridge رو از GitHub می‌گیره (اگه بسته بود از mirror به اسم jsDelivr). فقط خطوط معتبر رو قبول می‌کنه، همه رو موازی تست می‌کنه و سریع‌ترین‌ها رو نگه می‌داره.
-- **حالت کل سیستم (VPN).** همه‌ی برنامه‌ها، از جمله تلگرام، رو از Tor رد می‌کنه. می‌تونی تعیین کنی کدوم برنامه‌ها از Tor برن و آی‌پی‌های ایران یا دامنه‌های دلخواه مستقیم وصل بشن.
+- **حالت کل سیستم (VPN) و اسپلیت پیشرفته.** همه‌ی برنامه‌ها را از Tor رد می‌کند و در بخش Split می‌توانی برای هر برنامه (`Tor Strict` ضدنشت، `Tor`، `Direct` یا `Block`) بر اساس مسیر فایل، پوشه یا اسم تصمیم بگیری، قانون دامنه/IP/پورت بسازی، اتصالات زنده را ببینی و تست نشت (`Leak Audit`) بگیری.
+- **کیل سوییچ سخت‌گیرانه در سطح سیستم‌عامل (ویندوز و لینوکس).** در ویندوز با WFP و در لینوکس با `nftables` و `cgroup v2` جلوی هرگونه نشت IP، IPv6 و DNS هنگام قطع تونل را می‌گیرد. حالت **Persistent Lock** حتی پس از قطع اتصال یا ری‌استارت سیستم هم قفل می‌ماند تا خودت با دکمه‌ی **Unlock** یا دستور `--unlock-killswitch` آن را باز کنی.
 - **حالت پروکسی.** پروکسی HTTP سیستم و SOCKS5، که با گوشی‌های روی همون Wi-Fi هم قابل اشتراکه.
 - **دکمه‌ی «Can't open Gemini?»** (ویندوز و لینوکس). گوگل خیلی از خروجی‌های Tor رو برای Gemini و NotebookLM می‌بنده. با یه لمس دنبال خروجی‌ای می‌گرده که گوگل قبول کنه و همون رو ثابت می‌کنه. روی خود دکمه پیشرفت جستجو و بعدش «Gemini unblocked ✓» نشون داده می‌شه. با «New identity» به حالت قبل برمی‌گرده.
-- **سینی سیستم (ویندوز).** دکمه‌ی بستن برنامه رو به سینی می‌بره و اتصال می‌مونه. برای باز کردن دوباره یا بستن کامل، روی آیکونش راست‌کلیک کن (*Open* یا *Quit*).
+- **سینی سیستم (ویندوز).** دکمه‌ی بستن برنامه رو به سینی می‌بره و اتصال می‌مونه. برای باز کردن دوباره، باز کردن کیل سوییچ یا بستن کامل، روی آیکونش راست‌کلیک کن (*Open*، *Unlock Kill Switch* یا *Quit*).
 - **امکانات دیگه:** انتخاب کشور خروجی، نمایش سرعت لحظه‌ای، تعویض هویت، جلوگیری از نشت IPv6 و تاریخچه‌ی اتصال.
+
+### تقسیم ترافیک (Split) و کیل سوییچ
+
+- **قوانین ۴ حالته برای هر برنامه (`Tor Strict 🔒`، `Tor`، `Direct`، `Block`).** انتخابگر خودکار **App Picker** برنامه‌های در حال اجرا و نصب‌شده (روی ویندوز و لینوکس) را پیدا می‌کند تا بر اساس مسیر دقیق فایل، پوشه یا نام برنامه قانون بگذاری.
+- **قوانین دامنه، IP/CIDR و پورت + پریست‌ها و پروفایل‌ها.** امکان افزودن پسوند دامنه، دامنه‌ی دقیق، کلمه کلیدی، رنج IP و پورت (یا لیست مستقیم گروهی)، همراه با پریست‌های آماده (`Bypass Iran`، `Anti-Leak Shield` برای بستن نشت WebRTC/STUN/mDNS/DoT و `Block Telemetry`)، پروفایل‌ها، ایمپورت/اکسپورت JSON و شبیه‌ساز تصمیم مسیر (**Rule Tester**).
+- **پایش زنده (`Live Monitor`) و ممیزی نشت (`Leak Audit`).** مشاهده‌ی اتصالات زنده‌ی هر برنامه روی API داخلی و امن `clash_api`، تغییر مسیر آنی یا قطع لحظه‌ای اتصال (**Kill Connection**)، اعمال آنی تغییرات (**Apply Live**) بدون قطع شدن Tor، و بررسی ۴ مرحله‌ای نشت (فایروال، ایزوله‌سازی تونل، قفل DNS/IPv6/WebRTC و وضعیت App Jail).
+- **کیل سوییچ سخت‌گیرانه در سطح سیستم‌عامل (فقط مسدودسازی شبکه).** دو حالت `Strict Apps Only` (قفل اپ‌های `Tor Strict` در سطح کرنل) و `Whole System` (قفل کل سیستم) با **WFP ویندوز** و **`nftables` + `cgroup v2` + دکمه‌ی `▶ Launch Protected` لینوکس** بدون بستن اجباری برنامه‌ها.
+- **باز کردن قفل ماندگار (Persistent Lock):** وقتی حالت ماندگار روشن باشد، حتی پس از قطع اتصال یا ری‌استارت سیستم هم شبکه قفل می‌ماند تا زمانی که با یکی از روش‌های زیر قفل را باز کنی:
+  1. زدن دکمه‌ی قرمز **Unlock** روی نوار بالای صفحه اصلی یا خاموش کردن کلید **Kill Switch** در تنظیمات،
+  2. گزینه‌ی *Unlock Kill Switch* از منوی سینی سیستم (Tray) در ویندوز،
+  3. دستور خط فرمان `Gommage.exe --unlock-killswitch` (ویندوز) یا `sudo gommage --unlock-killswitch` (لینوکس) و راهنمای خودکار `UNLOCK-KILLSWITCH.txt`.
 
 ### دانلود و اجرا
 
-فایل `Gommage-windows.zip` رو از بخش [Releases](../../releases) بگیر، از حالت فشرده دربیار و `Gommage.exe` رو اجرا کن. اول بدون دسترسی ادمین (حالت پروکسی) باز می‌شه. فقط وقتی حالت کل سیستم یا مسدود کردن IPv6 رو روشن کنی، همون لحظه دسترسی ادمین می‌خواد.
+فایل `Gommage-windows.zip` رو از بخش [Releases](../../releases) بگیر، از حالت فشرده دربیار و `Gommage.exe` رو اجرا کن. اول بدون دسترسی ادمین (حالت پروکسی) باز می‌شه. فقط وقتی حالت کل سیستم، Kill Switch یا مسدود کردن IPv6 رو روشن کنی، همون لحظه دسترسی ادمین می‌خواد.
 
 دفعه‌ی اول، Tor و برای حالت VPN برنامه‌ی sing-box دانلود می‌شن. **درستی هر دو قبل از اجرا با هش SHA-256 بررسی می‌شه.** اگه دانلود فیلتر بود، برنامه دقیقاً می‌گه کدوم فایل رو از راه دیگه بگیری و کجا بذاری.
 
-> **هشدار ویندوز یا آنتی‌ویروس:** فایل امضای دیجیتال نداره، برای همین ممکنه ویندوز بگه «Windows protected your PC». روی *More info ← Run anyway* بزن. بعضی آنتی‌ویروس‌ها هم به هر ابزار Tor یا VPN گیر می‌دن. ممکنه Microsoft Defender هم جلوش رو بگیره و بگه `Behavior:Win32/Impact.A!ml`. این حدسِ یادگیری ماشینیِ Defender هست، چون فایل امضا نداره، ممکنه دسترسی admin بخواد و تنظیمات پراکسی و فایروال رو عوض می‌کنه. هشدار اشتباهه. اگه به فایل exe اعتماد نداری، از سورس اجرا کن. کل برنامه دو فایل خواناست.
+> **هشدار ویندوز یا آنتی‌ویروس:** فایل امضای دیجیتال نداره، برای همین ممکنه ویندوز بگه «Windows protected your PC». روی *More info ← Run anyway* بزن. بعضی آنتی‌ویروس‌ها هم به هر ابزار Tor یا VPN گیر می‌دن. ممکنه Microsoft Defender هم جلوش رو بگیره و بگه `Behavior:Win32/Impact.A!ml`. این حدسِ یادگیری ماشینیِ Defender هست، چون فایل امضا نداره، ممکنه دسترسی admin بخواد و تنظیمات پراکسی و فایروال رو عوض می‌کنه. هشدار اشتباهه. اگه به فایل exe اعتماد نداری، از سورس اجرا کن. کل برنامه چهار فایل خواناست (`gommage.py`، `split_engine.py`، `killswitch.py` و `ui.html`).
 
 ### حریم خصوصی
 
@@ -182,7 +208,7 @@ QR codes are on the **Support** page inside the app.
 <div dir="ltr">
 
 ```bash
-sudo apt install ./gommage_1.1.1_amd64.deb
+sudo apt install ./gommage_1.2.0_amd64.deb
 ```
 
 </div>
@@ -203,8 +229,8 @@ sh run.sh
 - اگه `tor` و `lyrebird` (یا `obfs4proxy`) نصب باشن، برنامه از همونا استفاده می‌کنه. وگرنه بسته‌ی Tor لینوکس رو دانلود می‌کنه و با هش SHA-256 بررسیش می‌کنه. bridgeهای داخلی Tor فقط توی همین بسته هستن؛ با Tor سیستم از bridge خودت یا لیست‌های عمومی استفاده کن. obfs4proxy فقط obfs4 رو پشتیبانی می‌کنه؛ برای webtunnel باید `lyrebird` نصب کنی.
 - اگه سرویس tor روشنه، پورت 9050 رو گرفته. یا خاموشش کن (`sudo systemctl disable --now tor`) یا توی Settings پورت SOCKS رو عوض کن.
 - حالت پروکسی، پروکسی سیستم GNOME رو تنظیم می‌کنه. روی دسکتاپ‌های دیگه برنامه‌هات رو خودت روی `127.0.0.1:8118` (HTTP) یا `127.0.0.1:9050` (SOCKS5) تنظیم کن.
-- **حالت کل سیستم و مسدود کردن IPv6 دسترسی root می‌خوان.** وقتی روشنشون کنی برنامه رمزت رو می‌پرسه (pkexec) و با root دوباره باز می‌شه. می‌تونی هم از اول با `sudo -E sh run.sh` اجراش کنی.
-- توی لیست برنامه‌ها اسم برنامه‌ی لینوکسی رو بنویس، مثلاً `telegram-desktop`، نه اسم exe.
+- **حالت کل سیستم، Kill Switch و مسدود کردن IPv6 دسترسی root می‌خوان.** وقتی روشنشون کنی برنامه رمزت رو می‌پرسه (pkexec) و با root دوباره باز می‌شه؛ می‌تونی هم از اول با `sudo -E sh run.sh` اجراش کنی. کیل سوییچ برنامه‌ها با `nftables` و `cgroup v2` (و دکمه‌ی **▶ Launch Protected** برای اجرای برنامه داخل `gommage_jail`) کار می‌کنه و در صورت حذف بسته با `apt remove gommage` قوانین فایروال و سرویس systemd آن هم خودکار پاک می‌شن.
+- توی لیست برنامه‌ها و انتخابگر **App Picker** لینوکس، برنامه‌ها بر اساس مسیر فایل، پوشه یا نام برنامه لینوکسی (مثلاً `telegram-desktop` یا `firefox`، و با تشخیص برنامه‌های Flatpak/Snap) تطبیق داده می‌شن، نه اسم exe.
 
 ### اندروید (گوشی و تلویزیون)
 

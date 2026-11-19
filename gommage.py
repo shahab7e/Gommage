@@ -1,22 +1,24 @@
 """Gommage: tiny Tor client (Windows, Linux) with custom bridges (webtunnel/obfs4/...), system proxy or whole-system VPN.
 Run: python gommage.py   (first run needs the Tor Expert Bundle, or on Linux the system's tor; see ensure_tor)
 """
-import base64, ctypes, glob, hashlib, io, ipaddress, json, ntpath, os, re, shutil, signal, socket, sqlite3, ssl, subprocess, sys
+import base64, ctypes, glob, hashlib, io, ipaddress, json, ntpath, os, queue, re, shutil, signal, socket, sqlite3, ssl, subprocess, sys
 import random, tarfile, threading, time, urllib.request, webbrowser, zipfile
 from concurrent.futures import ThreadPoolExecutor
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))  # .deb install vendors pywebview here
-import webview
-if sys.platform == "win32":
-    import pystray
-    from PIL import Image
+
+import split_engine, killswitch
 
 WIN = sys.platform == "win32"
+FROZEN = getattr(sys, "frozen", False)  # running as the PyInstaller exe
+APP_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))  # where ui.html, fonts, assets live
 if WIN:
     import winreg
 EXE = ".exe" if WIN else ""
 VER = "15.0.25"  # ponytail: pinned; bump when Tor ships a new bundle
 URL = f"https://dist.torproject.org/torbrowser/{VER}/tor-expert-bundle-{'windows' if WIN else 'linux'}-x86_64-{VER}.tar.gz"
-if WIN:
+_CLI_HOME = killswitch.parse_home_arg(sys.argv)
+if _CLI_HOME:
+    HOME = _CLI_HOME
+elif WIN:
     HOME = os.path.join(os.environ["APPDATA"], "Gommage")
     OLD_HOME = os.path.join(os.environ["APPDATA"], "TorBridge")  # the app's former name: carry its data over
     if os.path.isdir(OLD_HOME) and not os.path.exists(HOME):
@@ -24,9 +26,21 @@ if WIN:
             os.rename(OLD_HOME, HOME)
         except OSError:
             HOME = OLD_HOME  # old copy still running and holding files; keep using its folder, move it next launch
-else:  # GOMMAGE_HOME: set by relaunch_root so the root copy keeps the user's settings
-    HOME = os.environ.get("GOMMAGE_HOME") or os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "Gommage")
-VERSION = "1.1.4"  # bump with every release; the app compares it with the latest GitHub release tag
+else:  # GOMMAGE_HOME: set by relaunch_root; under sudo, resolve the desktop user's real home (not /root)
+    _xdg = os.environ.get("XDG_CONFIG_HOME")
+    if not _xdg or (os.geteuid() == 0 and (os.environ.get("SUDO_UID") or os.environ.get("PKEXEC_UID")) and _xdg.startswith("/root")):
+        _xdg = os.path.join(split_engine.resolve_user_home_linux(), ".config")
+    HOME = os.environ.get("GOMMAGE_HOME") or os.path.join(_xdg, "Gommage")
+
+if __name__ == "__main__":
+    killswitch.handle_cli_early(sys.argv, HOME, os.path.abspath(__file__))
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))  # .deb install vendors pywebview here
+import webview
+if WIN:
+    import pystray
+    from PIL import Image
+VERSION = "1.2.0"  # bump with every release; the app compares it with the latest GitHub release tag
 REPO = "shahab7e/Gommage"
 SOCKS = 9050  # defaults; overwritten from settings by apply_ports()
 HTTP = 8118  # HTTPS CONNECT proxy: browsers resolve DNS through Tor (plain SOCKS via WinINET leaks/breaks DNS)
@@ -67,13 +81,76 @@ def kill_tree(proc):
             pass
 
 
-def kill_stale_tor():
-    """A tor.exe/lyrebird.exe left from a crashed run holds 9050 and every attempt then dies on bind. Only ours (under HOME)."""
+def kill_stale_processes():
+    """Terminate leftover tor/lyrebird/sing-box from a crashed run so ports and TUN adapters aren't held."""
+    targets = set(TOR_PROCS + ["sing-box" + EXE])
+    mypid = os.getpid()
     if WIN:
-        names = ",".join(f"'{p}'" for p in TOR_PROCS)
-        run("powershell", "-NoProfile", "-Command",
-            f"Get-CimInstance Win32_Process | ? {{ $_.Name -in {names} -and $_.ExecutablePath -like '{HOME}\\*' }} "
-            "| % { Stop-Process -Id $_.ProcessId -Force }")
+        try:
+            from ctypes import wintypes
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+            class PE32(ctypes.Structure):
+                _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                            ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                            ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", wintypes.LONG), ("dwFlags", wintypes.DWORD),
+                            ("szExeFile", wintypes.WCHAR * 260)]
+
+            k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+            k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+            k32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PE32)]
+            k32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PE32)]
+            k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            k32.OpenProcess.restype = wintypes.HANDLE
+            k32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+            k32.TerminateProcess.argtypes = [wintypes.HANDLE, ctypes.c_uint]
+            k32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+            snap = k32.CreateToolhelp32Snapshot(0x2, 0)
+            if snap and snap != wintypes.HANDLE(-1).value:
+                try:
+                    pe = PE32(); pe.dwSize = ctypes.sizeof(pe)
+                    ok = k32.Process32FirstW(snap, ctypes.byref(pe))
+                    home_prefix = os.path.normcase(os.path.abspath(HOME)).rstrip("\\/") + os.sep
+                    while ok:
+                        pid = pe.th32ProcessID
+                        if pid > 4 and pid != mypid and pe.szExeFile.lower() in {t.lower() for t in targets}:
+                            h = k32.OpenProcess(0x1001, False, pid)
+                            if h:
+                                try:
+                                    buf = ctypes.create_unicode_buffer(1024); sz = wintypes.DWORD(1024)
+                                    if k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(sz)):
+                                        if os.path.normcase(buf.value).startswith(home_prefix):
+                                            k32.TerminateProcess(h, 1)
+                                finally:
+                                    k32.CloseHandle(h)
+                        ok = k32.Process32NextW(snap, ctypes.byref(pe))
+                finally:
+                    k32.CloseHandle(snap)
+        except Exception:
+            pass
+    else:
+        torrc_marker = os.path.join(HOME, "torrc").encode()
+        sb_marker = b"sing-box.json"
+        for pid_dir in glob.glob("/proc/[0-9]*"):
+            pid_s = os.path.basename(pid_dir)
+            if not pid_s.isdigit() or int(pid_s) == mypid:
+                continue
+            try:
+                exe = os.path.realpath(os.path.join(pid_dir, "exe"))
+                cmd = open(os.path.join(pid_dir, "cmdline"), "rb").read(2048)
+            except OSError:
+                continue
+            if os.path.basename(exe) in targets and (
+                exe.startswith(HOME + "/") or torrc_marker in cmd or sb_marker in cmd
+            ):
+                try:
+                    os.kill(int(pid_s), signal.SIGKILL)
+                except OSError:
+                    pass
+
+
+kill_stale_tor = kill_stale_processes
 
 
 def run(*cmd, input=None):
@@ -126,13 +203,14 @@ def now():
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def free_port(p, taken=(), kind=socket.SOCK_STREAM):
+def free_port(p, taken=(), kind=socket.SOCK_STREAM, host=None):
     """First port >= p that nothing holds (and isn't in `taken`)."""
+    bind_host = host or LISTEN
     while p < 65535:
         if p not in taken:
             try:
                 with socket.socket(socket.AF_INET, kind) as sk:
-                    sk.bind((LISTEN, p))
+                    sk.bind((bind_host, p))
                 return p
             except OSError:
                 pass
@@ -142,9 +220,10 @@ def free_port(p, taken=(), kind=socket.SOCK_STREAM):
 
 def apply_ports(listen, socks, http):
     """Validate user-entered listen IP/ports and make them active. Raises ValueError on bad input."""
-    global LISTEN, LOCAL, SOCKS, HTTP
+    global LISTEN, LOCAL, SOCKS, HTTP, DNS_PORT
     ip = ipaddress.IPv4Address(listen.strip())
     s, h = int(socks), int(http)
+    DNS_PORT = 9053
     if not (1 <= s <= 65535 and 1 <= h <= 65535) or s == h or DNS_PORT in (s, h):
         raise ValueError(f"ports must be 1-65535, different from each other and not {DNS_PORT} (used for DNS)")
     LISTEN, SOCKS, HTTP = str(ip), s, h
@@ -166,7 +245,8 @@ def migrate_old_name():
 def load_settings():
     s = {"bridges": "", "country": "Any", "vpn": False, "block_ipv6": False, "bypass": "", "bypass_ir": True, "app_mode": "all", "apps": "",
          "listen": "127.0.0.1", "socks": SOCKS, "http": HTTP, "autostart": False, "autoconnect": False,
-         "last_good": [], "community": True, "stats": {}}
+         "last_good": [], "community": True, "stats": {},
+         "ks_mode": "off", "ks_persistent": False, "ks_allow_lan": False, "ks_allow_direct": False}
     try:
         s.update(json.load(open(SETTINGS, encoding="utf8")))
     except (OSError, ValueError):
@@ -176,6 +256,7 @@ def load_settings():
                 break
             except OSError:
                 pass
+    s, _ = split_engine.migrate_settings(s)
     return s
 
 
@@ -438,11 +519,11 @@ def bridge_strings(obj):
     return [b for x in items for b in bridge_strings(x)]
 
 
-def fetch_bridges(via_proxy=None, log=print):
-    """Ask the Tor Project (Moat API) for bridges that work in Iran. Tries through Tor, direct, then fronted."""
+def fetch_bridges(via_proxy=None, log=print, allow_direct=True):
+    """Ask the Tor Project (Moat API) for bridges that work in Iran. Tries through Tor, and optionally direct/fronted."""
     body = json.dumps({"country": "ir", "transports": ["obfs4", "webtunnel", "snowflake", "meek"]}).encode()
     routes = ([("via Tor", MOAT, None, via_proxy)] if via_proxy else []) + \
-             [("direct", MOAT, None, None), ("fronted", MOAT_FRONT[0], MOAT_FRONT[1], None)]
+             ([("direct", MOAT, None, None), ("fronted", MOAT_FRONT[0], MOAT_FRONT[1], None)] if allow_direct else [])
     for name, base, host, proxy in routes:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({"https": proxy} if proxy else {}))
         for ep, data in (("settings", body), ("builtin", b"{}")):
@@ -543,15 +624,15 @@ def control(*cmds):
 
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-FROZEN = getattr(sys, "frozen", False)  # running as the PyInstaller exe
-APP_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))  # where ui.html, fonts, assets live
 
 
-def self_cmd():
+def self_cmd(extra_args=""):
     """(program, args) that start this app again without a console window."""
     if FROZEN:
-        return sys.executable, ""
-    return sys.executable.replace("python.exe", "pythonw.exe"), f'"{os.path.abspath(__file__)}"'
+        return sys.executable, extra_args
+    exe = sys.executable.replace("python.exe", "pythonw.exe") if WIN else sys.executable
+    args = f'"{os.path.abspath(__file__)}"' + (f" {extra_args}" if extra_args else "")
+    return exe, args
 
 
 def set_autostart(on):
@@ -642,15 +723,47 @@ class Api:
 
     def init(self):
         a = self._app
-        return {"settings": a.s, "countries": COUNTRIES, "app_modes": APP_MODES, "log_path": LOG, "windows": WIN,
-                "state": a.ui_state, "log": open(LOG, encoding="utf8", errors="replace").read()[-20000:] if os.path.exists(LOG) else ""}
+        return {
+            "settings": a.s,
+            "countries": COUNTRIES,
+            "app_modes": APP_MODES,
+            "log_path": LOG,
+            "windows": WIN,
+            "state": a.ui_state,
+            "split": a.s.get("split"),
+            "ks": a.ks_status(),
+            "profiles_builtin": split_engine.BUILTIN_PROFILES,
+            "log": open(LOG, encoding="utf8", errors="replace").read()[-20000:] if os.path.exists(LOG) else "",
+        }
 
     def set(self, key, value):
         a = self._app
-        a.s[key] = value
-        if key == "autostart":
-            set_autostart(bool(value))
-        a.save_settings()
+        push_kw = None
+        with a.settings_lock:
+            if key == "vpn" and not value and a.s.get("ks_mode", "off") != "off":
+                if a.ks.mode != "off" and not is_admin():
+                    res = a.unlock_killswitch()
+                    if not res.get("ok"):
+                        return res
+                else:
+                    a.s["ks_mode"] = "off"
+                    a.s["ks_persistent"] = False
+                    if a.ks.mode != "off" and is_admin():
+                        a.ks.disarm(force_persistent=True)
+                        if a.state_ == "locked" and not a.proc:
+                            a.render("Disconnected", "red")
+            a.s[key] = value
+            if key == "autostart":
+                set_autostart(bool(value))
+            a.save_settings()
+            if key in ("vpn", "ks_mode"):
+                push_kw = {
+                    "ks": a.ks_status(),
+                    "settings": {"vpn": a.s["vpn"], "ks_mode": a.s.get("ks_mode", "off"), "ks_persistent": bool(a.s.get("ks_persistent", False))},
+                }
+        if push_kw:
+            a.push(**push_kw)
+        return {"ok": True}
 
     def toggle(self):
         self._app.toggle()
@@ -677,6 +790,57 @@ class Api:
     def pick_app(self):
         self._app.pick_app()
 
+    def get_split(self):
+        return {"split": self._app.s["split"], "ks": self._app.ks_status()}
+
+    def save_split(self, cfg):
+        return self._app.save_split(cfg)
+
+    def apply_split(self):
+        return self._app.apply_split_live()
+
+    def reset_split(self):
+        return self._app.reset_split()
+
+    def discover_apps(self):
+        return split_engine.discover_apps(exclude_dir=HOME, home_hint=HOME)
+
+    def pick_app_file(self):
+        return self._app.pick_app_dialog(folder=False)
+
+    def pick_app_folder(self):
+        return self._app.pick_app_dialog(folder=True)
+
+    def test_rule(self, query):
+        return self._app.test_rule(query)
+
+    def live_connections(self):
+        return self._app.live_connections()
+
+    def kill_connection(self, cid):
+        return bool(self._app.clash and self._app.clash.close_connection(cid))
+
+    def kill_app_connections(self, process_key):
+        return self._app.kill_app_connections(process_key)
+
+    def set_killswitch(self, cfg):
+        return self._app.set_killswitch(cfg)
+
+    def unlock_killswitch(self):
+        return self._app.unlock_killswitch()
+
+    def launch_protected(self, app_id):
+        return self._app.launch_protected(app_id)
+
+    def run_leak_audit(self):
+        return self._app.run_leak_audit()
+
+    def export_split(self):
+        return json.dumps(self._app.s["split"], indent=2)
+
+    def import_split(self, text):
+        return self._app.import_split(text)
+
     def open_update(self):
         webbrowser.open(f"https://github.com/{REPO}/releases/latest")
 
@@ -699,16 +863,42 @@ class App:
         self.proc = self.tun = None
         self.sid = None
         self.cancelled = False
+        self.stop_reason = None
         self.state_ = "idle"
         self.ui_state = {}
+        self._push_q = queue.Queue()
         self.closing = self.finding = False
+        self.starting_vpn = self.reloading_vpn = False
+        self.last_newnym = 0.0
+        self.lock = threading.RLock()
+        self.settings_lock = threading.RLock()
+        self.session_gen = 0
+        self.clash = self.clash_port = self.clash_secret = None
+        self.upstream_dns = None
+        self._ir_cidrs = []
+        self._applied_sb_shape = None
+        self._clash_fails = 0
+        self._circ_missing_since = None
+        self._ks_tick = 0
         relink_autostart = migrate_old_name()
         self.s = load_settings()
         if relink_autostart and self.s["autostart"]:
             set_autostart(True)
         if self.s["country"] not in COUNTRIES:
             self.s["country"] = "Any"
-        self.render("Disconnected", "red")
+        self.ks = killswitch.create_killswitch(HOME, self.log)
+        self.ks.reconcile_startup(self.s)
+        if "--arm-ks" in sys.argv and is_admin() and self.s.get("ks_mode", "off") != "off":
+            try:
+                self._arm_ks_locked("Kill Switch armed")
+            except Exception as e:
+                self.log(f"Kill Switch arm error: {e}")
+        if self.ks.locked:
+            self.state_ = "locked"
+            self.ui_state.update(state="locked", title="Network Locked", sub=self.ks.reason or "Kill Switch active", pct=None, ks=self.ks_status())
+        else:
+            self.render("Disconnected", "red")
+            self.ui_state["ks"] = self.ks_status()
         self.win = webview.create_window("Gommage", os.path.join(APP_DIR, "ui.html"),
                                          js_api=Api(self), width=400, height=780, min_size=(380, 740),
                                          frameless=True, easy_drag=False, background_color="#121419")
@@ -717,10 +907,16 @@ class App:
             self.win.events.shown += self.round_corners
             self.tray = pystray.Icon("Gommage", Image.open(os.path.join(APP_DIR, "assets", "icon.png")), "Gommage", pystray.Menu(
                 pystray.MenuItem("Open", lambda: self.win.show(), default=True),
+                pystray.MenuItem("Unlock Kill Switch", lambda: threading.Thread(target=self.unlock_killswitch, daemon=True).start()),
                 pystray.MenuItem("Quit", self.quit_from_tray)))
             self.tray.run_detached()
-        self.win.events.loaded += lambda: self.s["autoconnect"] and self.after(500, self.toggle)
+        self.win.events.loaded += self._on_loaded
+        threading.Thread(target=self._push_loop, daemon=True).start()
         threading.Thread(target=self.traffic, daemon=True).start()
+
+    def _on_loaded(self):
+        if self.s["autoconnect"] or ("--connect" in sys.argv and is_admin()):
+            self.after(350, self.toggle)
 
     def round_corners(self):
         """Windows 11: rounded corners and no light border on the frameless window."""
@@ -739,17 +935,34 @@ class App:
         """Tk-style deferred call; the page is updated from any thread via evaluate_js."""
         threading.Timer(ms / 1000, fn, a).start()
 
+    def _push_loop(self):
+        while not self.closing:
+            try:
+                kw = self._push_q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if kw is None or self.closing or not hasattr(self, "win"):
+                continue
+            try:
+                self.win.evaluate_js(f"window.ui && ui({json.dumps(kw)})")
+            except Exception:
+                pass  # window not ready yet / closing; init() hands over ui_state
+
     def push(self, **kw):
         self.ui_state.update({k: v for k, v in kw.items() if k != "log"})
-        if self.closing:
+        if self.closing or not hasattr(self, "win"):
             return  # evaluate_js would wait forever on a window that is shutting down
-        try:
-            self.win.evaluate_js(f"window.ui && ui({json.dumps(kw)})")
-        except Exception:
-            pass  # window not ready yet / closing; init() hands over ui_state
+        q = getattr(self, "_push_q", None)
+        if q is not None:
+            q.put(kw)
+        else:
+            try:
+                self.win.evaluate_js(f"window.ui && ui({json.dumps(kw)})")
+            except Exception:
+                pass
 
     def render(self, text, color):
-        self.state_ = {"green": "on", "orange": "busy", "red": "err" if text.startswith(("Error", "Bad")) else "idle"}[color]
+        self.state_ = {"green": "on", "orange": "busy", "red": "err" if text.startswith(("Error", "Bad")) else "idle", "locked": "locked"}[color]
         title, _, rest = text.partition(" (")
         title = title.removeprefix("Error: ")
         title = title[:1].upper() + title[1:]
@@ -765,31 +978,146 @@ class App:
         else:
             self.ui_state.update(state=self.state_, title="Not Connected", sub="", pct=None)
 
+    def ks_status(self) -> dict:
+        st = self.ks.status()
+        st["allow_lan"] = bool(self.s.get("ks_allow_lan", False))
+        st["allow_direct"] = bool(self.s.get("ks_allow_direct", False))
+        st["force_tor_dns"] = bool(self.s.get("split", {}).get("force_tor_dns", True))
+        return st
+
+    def _runtime_dir(self) -> str:
+        return "/run/gommage" if not WIN else os.path.join(HOME, "runtime")
+
+    def _tor_binary_paths(self, tor: str | None = None, pt: str | None = None) -> list[str]:
+        cands = []
+        if tor:
+            cands.append(tor)
+        if pt:
+            cands.append(pt)
+            pt_dir = os.path.dirname(pt)
+            for name in TOR_PROCS:
+                p = os.path.join(pt_dir, name)
+                if os.path.exists(p):
+                    cands.append(p)
+        tor_dir = os.path.join(HOME, "tor")
+        for p in (os.path.join(tor_dir, "tor" + EXE),
+                  os.path.join(tor_dir, "pluggable_transports", "lyrebird" + EXE),
+                  os.path.join(tor_dir, "pluggable_transports", "conjure-client" + EXE)):
+            if os.path.exists(p):
+                cands.append(p)
+        return list(dict.fromkeys(split_engine.canonical_path(p) for p in cands if p and os.path.exists(p)))
+
+    def _effective_force_tor_dns(self) -> bool:
+        sp = self.s["split"]
+        ks_mode = self.s.get("ks_mode", "off")
+        ks_strict_no_direct = (ks_mode == "system" and not bool(self.s.get("ks_allow_direct", False)))
+        has_strict_apps = any(a.get("enabled", True) and a.get("action") == "tor_strict" for a in sp.get("apps", []))
+        return bool(sp.get("force_tor_dns", True)) or ks_strict_no_direct or has_strict_apps
+
+    def _arm_ks_locked(
+        self,
+        reason: str,
+        connecting_hostname_bridge: bool = False,
+        tor_paths: list[str] | None = None,
+        kill_sockets: bool = True,
+    ) -> dict:
+        ks_mode = self.s.get("ks_mode", "off")
+        if ks_mode == "off":
+            return self.ks.disarm(force_persistent=True)
+        if tor_paths is None:
+            tor_paths = self._tor_binary_paths()
+        if ks_mode == "system" and not tor_paths and not self.proc:
+            # Ensure tor binaries exist before arming WFP AppId system lock
+            tor, pt = ensure_tor(self.log)
+            tor_paths = self._tor_binary_paths(tor, pt)
+        st = self.ks.arm(
+            mode=ks_mode,
+            persistent=bool(self.s.get("ks_persistent", False)),
+            tor_paths=tor_paths,
+            singbox_path=SINGBOX if os.path.exists(SINGBOX) else None,
+            split_cfg=self.s["split"],
+            allow_lan=bool(self.s.get("ks_allow_lan", False)),
+            allow_direct=bool(self.s.get("ks_allow_direct", False)),
+            force_tor_dns=self._effective_force_tor_dns(),
+            connecting_hostname_bridge=connecting_hostname_bridge,
+            tunnel_open=False,
+            reason=reason,
+            kill_sockets=kill_sockets,
+        )
+        return st
+
+    def on_tunnel_drop(self, reason: str):
+        with self.lock:
+            if self.cancelled or self.reloading_vpn or self.state_ == "locked":
+                return
+            self.log(f"WATCHDOG: {reason}")
+            self.stop(reason="crash", drop_reason=reason)
+
     def traffic(self):
-        """Live down/up rate from Tor's byte counters, once a second while connected."""
+        """Live down/up rate + active health watchdog for Tor circuits and sing-box TUN."""
         last = None
         while True:
             time.sleep(1)
+            self._ks_tick += 1
             if self.state_ != "on":
                 last = None
+                self._clash_fails = 0
+                self._circ_missing_since = None
+                if not WIN and self.ks.mode != "off" and self._ks_tick % 3 == 0:
+                    self.push(ks=self.ks_status())
                 continue
+            if not self.starting_vpn and not self.reloading_vpn:
+                if (self.proc and self.proc.poll() is not None) or (
+                    self.s.get("vpn") and (self.tun is None or (isinstance(self.tun, subprocess.Popen) and self.tun.poll() is not None))
+                ):
+                    self.on_tunnel_drop("Tor or VPN process exited unexpectedly")
+                    continue
+                if self.s.get("vpn") and self.clash:
+                    if not self.clash.ping():
+                        self._clash_fails += 1
+                        if self._clash_fails >= 3:
+                            self.on_tunnel_drop("VPN tunnel stopped responding")
+                            continue
+                    else:
+                        self._clash_fails = 0
             try:
-                r = control("GETINFO traffic/read traffic/written")
+                r = control("GETINFO traffic/read traffic/written circuit-status")
                 cur = (int(re.search(r"traffic/read=(\d+)", r)[1]), int(re.search(r"traffic/written=(\d+)", r)[1]))
             except Exception:
                 continue
             if last:
-                self.push(down=cur[0] - last[0], up=cur[1] - last[1])
+                kw = {"down": cur[0] - last[0], "up": cur[1] - last[1]}
+                if not WIN and self.ks.mode != "off" and self._ks_tick % 3 == 0:
+                    kw["ks"] = self.ks_status()
+                self.push(**kw)
             last = cur
+
+            if not self.starting_vpn and not self.reloading_vpn and not self.finding and (time.time() - self.last_newnym >= 15):
+                has_general = bool(re.search(r"^(?:250[-+]circuit-status=)?\d+ BUILT .*PURPOSE=GENERAL", r, re.M))
+                if has_general:
+                    self._circ_missing_since = None
+                else:
+                    self._circ_missing_since = self._circ_missing_since or time.time()
+                    if time.time() - self._circ_missing_since >= 15:
+                        self.on_tunnel_drop("Tor circuits lost")
+                        continue
+            else:
+                self._circ_missing_since = None
 
     # ---------- helpers ----------
     def save_settings(self):
-        os.makedirs(HOME, exist_ok=True)
-        json.dump(self.s, open(SETTINGS, "w", encoding="utf8"), indent=1)
+        with self.settings_lock:
+            os.makedirs(HOME, exist_ok=True)
+            split_engine.sync_legacy_fields(self.s)
+            tmp = SETTINGS + ".tmp"
+            with open(tmp, "w", encoding="utf8") as f:
+                json.dump(self.s, f, indent=1)
+            os.replace(tmp, SETTINGS)
 
     def set_bridges(self, text):
-        self.s["bridges"] = text
-        self.save_settings()
+        with self.settings_lock:
+            self.s["bridges"] = text
+            self.save_settings()
         self.push(bridges=text)
 
     def log(self, s):
@@ -870,6 +1198,8 @@ class App:
         self.push(speed=text)
 
     def get_bridges(self):
+        if not self.proc and self.ks.mode == "system" and self.ks.locked:
+            return self.push(test="Blocked while Whole-System Kill Switch is locked — connect or unlock first")
         self.push(test="looking for fresh bridges…")
 
         def go():
@@ -877,7 +1207,7 @@ class App:
             cur = clean_bridges(self.s["bridges"])
             found = fetch_public(via, self.log) if self.s.get("community", True) else {}
             if via:  # Tor Project's own API only answers through Tor from Iran
-                for l in fetch_bridges(via, self.log):
+                for l in fetch_bridges(via, self.log, allow_direct=False):
                     found.setdefault(l, []).append("Tor Project")
             found = {l: v for l, v in found.items() if l not in cur}
             if not found:
@@ -934,6 +1264,7 @@ class App:
     def new_identity(self):
         def go():
             try:
+                self.last_newnym = time.time()
                 self.exit_conf()
                 control("SIGNAL NEWNYM")
                 self.push(exit={"ip": "getting new identity…", "cc": ""}, gemini=None)
@@ -943,6 +1274,8 @@ class App:
         threading.Thread(target=go, daemon=True).start()
 
     def test_bridges(self):
+        if not self.proc and self.ks.mode == "system" and self.ks.locked:
+            return self.push(test="Blocked while Whole-System Kill Switch is locked — connect or unlock first")
         lines = clean_bridges(self.s["bridges"])
         self.push(test=f"testing {len(lines)}…")
 
@@ -968,6 +1301,443 @@ class App:
         self.save_settings()
         self.push(apps=cur)
 
+    # ---------- advanced split + kill switch API ----------
+    def pick_app_dialog(self, folder=False):
+        if folder:
+            paths = self.win.create_file_dialog(webview.FileDialog.FOLDER, allow_multiple=False)
+        else:
+            paths = self.win.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True, file_types=("Programs (*.exe)",) if WIN else ())
+        out = []
+        for p in paths or ():
+            cp = split_engine.canonical_path(p)
+            name = os.path.basename(cp.rstrip("\\/")) or cp
+            out.append({"name": name, "path": cp, "match_type": "folder" if folder else "path"})
+        return out
+
+    def save_split(self, cfg):
+        with self.settings_lock:
+            self.s["split"] = split_engine.validate_split(cfg)
+            self.save_settings()
+        return {"ok": True, "split": self.s["split"]}
+
+    def reset_split(self):
+        with self.settings_lock:
+            self.s["split"] = split_engine.default_split()
+            self.save_settings()
+        return {"ok": True, "split": self.s["split"]}
+
+    def import_split(self, text):
+        try:
+            sp = split_engine.parse_import_split(text)
+            with self.settings_lock:
+                self.s["split"] = sp
+                self.save_settings()
+            return {"ok": True, "split": self.s["split"]}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def test_rule(self, q):
+        if not self._ir_cidrs and os.path.exists(geoip()):
+            try:
+                self._ir_cidrs = country_nets(geoip(), "IR")
+            except OSError:
+                pass
+        return split_engine.test_route(
+            self.s["split"],
+            app_name=str(q.get("app_name") or ""),
+            app_path=str(q.get("app_path") or ""),
+            host=str(q.get("host") or ""),
+            ip=str(q.get("ip") or ""),
+            port=int(q.get("port") or 443),
+            proto=str(q.get("proto") or "tcp"),
+            ir_cidrs=self._ir_cidrs,
+            ks_mode=self.s.get("ks_mode", "off"),
+            ks_allow_lan=bool(self.s.get("ks_allow_lan", False)),
+            ks_allow_direct=bool(self.s.get("ks_allow_direct", False)),
+        )
+
+    def live_connections(self):
+        if not self.clash or self.state_ != "on":
+            return {"total": 0, "up_total": 0, "down_total": 0, "groups": []}
+        return self.clash.get_connections()
+
+    def kill_app_connections(self, process_key):
+        if not self.clash:
+            return 0
+        key_cmp = str(process_key or "")
+        if WIN:
+            key_cmp = key_cmp.lower()
+            return self.clash.close_matching_connections(
+                lambda c: (((c.get("metadata") or {}).get("processPath") or (c.get("metadata") or {}).get("process") or "System / Unknown").lower() == key_cmp)
+            )
+        return self.clash.close_matching_connections(
+            lambda c: (((c.get("metadata") or {}).get("processPath") or (c.get("metadata") or {}).get("process") or "System / Unknown") == key_cmp)
+        )
+
+    def _sb_shape(self):
+        sp = self.s["split"]
+        return (
+            sp.get("default_mode", "all"),
+            self._effective_force_tor_dns(),
+            bool(sp.get("presets", {}).get("anti_leak", True)),
+            self.s.get("ks_mode", "off"),
+            bool(self.s.get("ks_allow_lan", False)),
+            bool(self.s.get("ks_allow_direct", False)),
+            self.upstream_dns,
+        )
+
+    def _spawn_singbox_only(self):
+        runtime_dir = self._runtime_dir()
+        rules_dir = os.path.join(runtime_dir, "rules")
+        os.makedirs(runtime_dir, exist_ok=True)
+        if not WIN:
+            os.chmod(runtime_dir, 0o700)
+        if not self._ir_cidrs and os.path.exists(geoip()):
+            self._ir_cidrs = country_nets(geoip(), "IR")
+        rules_paths = split_engine.write_rule_sets(rules_dir, self.s["split"], self._ir_cidrs)
+        self.clash_port = free_port(19090, (SOCKS, HTTP, DNS_PORT), host="127.0.0.1")
+        self.clash_secret = os.urandom(16).hex()
+        self.clash = split_engine.ClashClient(self.clash_port, self.clash_secret)
+        ks_mode = self.s.get("ks_mode", "off")
+        cfg = split_engine.build_singbox_config(
+            self.s["split"],
+            rules_paths,
+            (LOCAL, SOCKS),
+            DNS_PORT,
+            self._tor_binary_paths(),
+            TOR_PROCS,
+            self.clash_port,
+            self.clash_secret,
+            upstream_dns=self.upstream_dns,
+            ks_mode=ks_mode,
+            ks_allow_lan=bool(self.s.get("ks_allow_lan", False)),
+            ks_allow_direct=bool(self.s.get("ks_allow_direct", False)),
+        )
+        sb_path = os.path.join(runtime_dir, "sing-box.json")
+        with open(sb_path, "w", encoding="utf8") as f:
+            json.dump(cfg, f, indent=1)
+        if not WIN:
+            os.chmod(sb_path, 0o600)
+        kw = {"cwd": HOME}
+        if not WIN and is_admin():
+            kw["group"] = killswitch.GOMMAGE_SB_GID
+        tun = self.tun = popen([SINGBOX, "run", "-c", sb_path, "-D", HOME], **kw)
+        threading.Thread(
+            target=lambda: [self.log("sing-box: " + re.sub(r"\x1b\[[0-9;]*m", "", l)) for l in tun.stdout],
+            daemon=True,
+        ).start()
+        deadline = time.time() + 8.0
+        luid = None
+        while time.time() < deadline:
+            if tun.poll() is not None:
+                raise RuntimeError("sing-box exited, see log")
+            if self.clash.ping():
+                if WIN:
+                    luid = killswitch.resolve_wintun_luid()
+                    if luid:
+                        break
+                elif os.path.exists("/sys/class/net/Gommage"):
+                    break
+            time.sleep(0.3)
+        if not self.clash.ping():
+            raise RuntimeError("sing-box Clash API unresponsive, see log")
+        if WIN and not luid:
+            luid = killswitch.resolve_wintun_luid()
+        if ks_mode != "off":
+            self.ks.open_tunnel(wintun_luid=luid, singbox_path=SINGBOX, split_cfg=self.s["split"])
+        self._applied_sb_shape = self._sb_shape()
+        run("ipconfig", "/flushdns") if WIN else run("resolvectl", "flush-caches")
+
+    def apply_split_live(self):
+        with self.lock:
+            runtime_dir = self._runtime_dir()
+            rules_dir = os.path.join(runtime_dir, "rules")
+            if not self._ir_cidrs and os.path.exists(geoip()):
+                try:
+                    self._ir_cidrs = country_nets(geoip(), "IR")
+                except OSError:
+                    pass
+            if not (self.state_ == "on" and self.s.get("vpn") and isinstance(self.tun, subprocess.Popen) and self.tun.poll() is None):
+                if self.s.get("ks_mode", "off") != "off" and is_admin():
+                    try:
+                        self._arm_ks_locked(self.ks.reason or "Kill Switch active")
+                    except Exception as e:
+                        return {"ok": False, "error": str(e), "ks": self.ks_status()}
+                return {"ok": True, "restarted": False, "ks": self.ks_status()}
+
+            need_restart = (self._sb_shape() != self._applied_sb_shape)
+            restarted = False
+            if not need_restart:
+                split_engine.write_rule_sets(rules_dir, self.s["split"], self._ir_cidrs)
+                if self.s.get("ks_mode", "off") != "off" and is_admin():
+                    luid = killswitch.resolve_wintun_luid() if WIN else None
+                    self.ks.arm(
+                        mode=self.s["ks_mode"],
+                        persistent=bool(self.s.get("ks_persistent", False)),
+                        tor_paths=self._tor_binary_paths(),
+                        singbox_path=SINGBOX if os.path.exists(SINGBOX) else None,
+                        split_cfg=self.s["split"],
+                        allow_lan=bool(self.s.get("ks_allow_lan", False)),
+                        allow_direct=bool(self.s.get("ks_allow_direct", False)),
+                        force_tor_dns=self._effective_force_tor_dns(),
+                        tunnel_open=True,
+                        wintun_luid=luid,
+                        reason="Protected",
+                        kill_sockets=False,
+                    )
+                if self.clash:
+                    tightened = {
+                        (a.get("path") or a.get("name") or "").lower()
+                        for a in self.s["split"].get("apps", [])
+                        if a.get("enabled", True) and a.get("action") in ("tor_strict", "tor", "block")
+                    }
+                    if tightened:
+                        self.clash.close_matching_connections(
+                            lambda c: "direct" in (c.get("chains") or []) and (
+                                ((c.get("metadata") or {}).get("processPath") or "").lower() in tightened
+                                or ((c.get("metadata") or {}).get("process") or "").lower() in tightened
+                            )
+                        )
+                run("ipconfig", "/flushdns") if WIN else run("resolvectl", "flush-caches")
+            else:
+                self.reloading_vpn = True
+                try:
+                    ks_mode = self.s.get("ks_mode", "off")
+                    if ks_mode != "off":
+                        if self.ks.mode == "off":
+                            self._arm_ks_locked("Applying split rules", kill_sockets=False)
+                        else:
+                            self.ks.lock_tunnel("Applying split rules")
+                    self.stop_vpn()
+                    if ks_mode != "off":
+                        self._arm_ks_locked("Applying split rules", kill_sockets=False)
+                    self._spawn_singbox_only()
+                    restarted = True
+                except Exception as e:
+                    self.log(f"Split live reload error: {e}")
+                    self.stop_vpn()
+                    if self.s.get("ks_mode", "off") != "off":
+                        self.ks.lock_tunnel(f"Reload failed: {e}")
+                        self.render(f"Connection Locked (Reload failed: {e})", "locked")
+                        self.push(ks=self.ks_status())
+                    else:
+                        self.stop(reason="crash", drop_reason=f"Split reload failed: {e}")
+                    return {"ok": False, "error": str(e), "restarted": False, "ks": self.ks_status()}
+                finally:
+                    self.reloading_vpn = False
+            self.push(ks=self.ks_status())
+            return {"ok": True, "restarted": restarted, "ks": self.ks_status()}
+
+    def _elevate_for_action(self, flag: str):
+        self.save_settings()
+        if not WIN:
+            threading.Thread(target=self.relaunch_root, args=([flag],), daemon=True).start()
+            return {"ok": True, "elevating": True, "ks": self.ks_status()}
+        extra = f'--home "{HOME}" {flag}'.strip()
+        if ctypes.windll.shell32.ShellExecuteW(None, "runas", *self_cmd(extra), None, 1) > 32:
+            self.closing = True
+            if hasattr(self, "_push_q"):
+                self._push_q.put(None)
+            threading.Thread(target=self.win.destroy, daemon=True).start()
+            return {"ok": True, "elevating": True, "ks": self.ks_status()}
+        return {"ok": False, "error": "Administrator permission was refused", "ks": self.ks_status()}
+
+    def set_killswitch(self, cfg):
+        with self.settings_lock:
+            mode = cfg.get("ks_mode", self.s.get("ks_mode", "off"))
+            if mode not in ("off", "apps", "system"):
+                return {"ok": False, "error": f"Invalid Kill Switch mode: {mode}"}
+            if mode == "off" and self.ks.mode != "off" and not is_admin():
+                return self.unlock_killswitch()
+            prev = (
+                self.s.get("ks_mode", "off"),
+                bool(self.s.get("ks_persistent", False)),
+                bool(self.s.get("ks_allow_lan", False)),
+                bool(self.s.get("ks_allow_direct", False)),
+                bool(self.s.get("vpn", False)),
+                bool(self.s["split"].get("force_tor_dns", True)),
+            )
+            self.s["ks_mode"] = mode
+            if "ks_persistent" in cfg:
+                self.s["ks_persistent"] = bool(cfg["ks_persistent"])
+            if "ks_allow_lan" in cfg:
+                self.s["ks_allow_lan"] = bool(cfg["ks_allow_lan"])
+            if "ks_allow_direct" in cfg:
+                self.s["ks_allow_direct"] = bool(cfg["ks_allow_direct"])
+            if "force_tor_dns" in cfg:
+                self.s["split"]["force_tor_dns"] = bool(cfg["force_tor_dns"])
+            if mode != "off":
+                self.s["vpn"] = True
+            else:
+                self.s["ks_persistent"] = False
+            self.save_settings()
+
+        if mode != "off" and not is_admin():
+            res = self._elevate_for_action("--arm-ks")
+            if not res.get("ok"):
+                with self.settings_lock:
+                    (
+                        self.s["ks_mode"],
+                        self.s["ks_persistent"],
+                        self.s["ks_allow_lan"],
+                        self.s["ks_allow_direct"],
+                        self.s["vpn"],
+                        self.s["split"]["force_tor_dns"],
+                    ) = prev
+                    self.save_settings()
+                res["settings"] = self.s
+            return res
+
+        try:
+            with self.lock:
+                if mode == "off":
+                    self.ks.disarm(force_persistent=True)
+                    if self.state_ == "locked" and not self.proc:
+                        self.render("Disconnected", "red")
+                elif self.state_ == "on" and isinstance(self.tun, subprocess.Popen) and self.tun.poll() is None:
+                    res = self.apply_split_live()
+                    if not res.get("ok"):
+                        return {**res, "settings": self.s}
+                else:
+                    self._arm_ks_locked("Kill Switch armed")
+                    if self.state_ != "busy":
+                        self.render("Network Locked (Kill Switch active)", "locked")
+            self.push(ks=self.ks_status(), settings={"vpn": self.s["vpn"], "ks_mode": mode, "ks_persistent": self.s["ks_persistent"]})
+            return {"ok": True, "ks": self.ks_status(), "settings": self.s}
+        except Exception as e:
+            self.log(f"Kill Switch error: {e}")
+            return {"ok": False, "error": str(e), "ks": self.ks_status(), "settings": self.s}
+
+    def unlock_killswitch(self):
+        if is_admin():
+            try:
+                self.ks.disarm(force_persistent=True)
+            except Exception as e:
+                self.log(f"Unlock Kill Switch error: {e}")
+                return {"ok": False, "error": str(e), "ks": self.ks_status(), "settings": self.s}
+            with self.settings_lock:
+                self.s["ks_mode"] = "off"
+                self.s["ks_persistent"] = False
+                self.save_settings()
+            if not self.proc:
+                self.render("Disconnected", "red")
+            self.push(ks=self.ks_status(), settings={"ks_mode": "off", "ks_persistent": False})
+            return {"ok": True, "ks": self.ks_status(), "settings": self.s}
+
+        if not WIN:
+            keep = [f"GOMMAGE_HOME={HOME}", "PYTHONPATH=" + os.pathsep.join(p for p in sys.path if p)]
+            cmd = ["pkexec", "env", *keep, sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)]) + ["--unlock-killswitch"]
+            try:
+                rc = subprocess.run(cmd).returncode
+            except FileNotFoundError:
+                rc = 127
+            if rc != 0:
+                return {"ok": False, "error": "Root permission required to unlock Kill Switch", "ks": self.ks_status(), "settings": self.s}
+        else:
+            extra = ("" if FROZEN else f'"{os.path.abspath(__file__)}" ') + f'--unlock-killswitch --elevated --home "{HOME}"'
+            if ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, extra.strip(), None, 1) <= 32:
+                return {"ok": False, "error": "Administrator permission was refused", "ks": self.ks_status(), "settings": self.s}
+            unlocked = False
+            for _ in range(30):
+                time.sleep(0.2)
+                if not killswitch.read_ks_state(HOME).get("armed"):
+                    unlocked = True
+                    break
+            if not unlocked:
+                return {"ok": False, "error": "Kill Switch unlock was cancelled or did not complete", "ks": self.ks_status(), "settings": self.s}
+
+        with self.settings_lock:
+            self.s["ks_mode"] = "off"
+            self.s["ks_persistent"] = False
+            self.save_settings()
+        self.ks.reconcile_startup(self.s)
+        if not self.proc and not self.ks.locked:
+            self.render("Disconnected", "red")
+        self.push(ks=self.ks_status(), settings={"ks_mode": "off", "ks_persistent": False})
+        return {"ok": True, "ks": self.ks_status(), "settings": self.s}
+
+    def launch_protected(self, app_id):
+        app = next((a for a in self.s["split"].get("apps", []) if a.get("id") == app_id), None)
+        if not app:
+            return {"ok": False, "message": "App rule not found"}
+        if self.s.get("ks_mode") != "apps" or self.ks.mode != "apps":
+            if not is_admin():
+                return {"ok": False, "message": "Enable Strict Apps Kill Switch and connect first"}
+        ok, msg = killswitch.launch_jailed(app.get("path", ""), os.path.abspath(__file__))
+        return {"ok": ok, "message": msg}
+
+    def run_leak_audit(self):
+        ks = self.ks_status()
+        live = self.ks.probe_live_state()
+        sp = self.s["split"]
+        checks = []
+
+        # 1. OS Kill Switch Firewall
+        if ks["mode"] != "off":
+            if live.get("active"):
+                fw_detail = f"Active ({live.get('backend')}, mode={ks['mode']}, persistent={ks['persistent']})"
+                if live.get("drop_count") is not None:
+                    fw_detail += f", {live['drop_count']} leaked packets dropped"
+                fw_status = "warn" if ks.get("warnings") else "ok"
+                if ks.get("warnings"):
+                    fw_detail += f" · {len(ks['warnings'])} warning(s)"
+            else:
+                fw_detail = "Kill Switch configured but OS firewall rules are not loaded (connect or arm as admin)"
+                fw_status = "fail"
+            checks.append({"id": "firewall", "title": "OS Kill Switch Firewall", "status": fw_status, "detail": fw_detail, "warnings": ks.get("warnings", [])})
+        else:
+            checks.append({"id": "firewall", "title": "OS Kill Switch Firewall", "status": "warn", "detail": "Kill Switch is OFF — apps can fall back to clearnet if tunnel drops", "fix_action": "enable_ks"})
+
+        # 2. Tunnel & System Proxy Isolation
+        tun_alive = isinstance(self.tun, subprocess.Popen) and self.tun.poll() is None
+        tor_alive = bool(self.proc and self.proc.poll() is None)
+        clash_ok = bool(self.clash and self.clash.ping())
+        if self.state_ == "on" and tor_alive and (not self.s["vpn"] or (tun_alive and clash_ok)):
+            exit_ip = (self.ui_state.get("exit") or {}).get("ip") or "pending"
+            checks.append({"id": "tunnel", "title": "Tor Tunnel & Proxy Isolation", "status": "ok" if self.s["vpn"] else "warn",
+                           "detail": f"Tor active (exit: {exit_ip})" + (" · TUN isolated (OS system proxy off)" if self.s["vpn"] else " · Proxy mode only (non-proxy apps bypass Tor)")})
+        elif self.state_ == "locked":
+            checks.append({"id": "tunnel", "title": "Tor Tunnel & Proxy Isolation", "status": "ok", "detail": "Tunnel down & OS firewall locked fail-closed (no clearnet leak)"})
+        else:
+            checks.append({"id": "tunnel", "title": "Tor Tunnel & Proxy Isolation", "status": "warn", "detail": "Not connected"})
+
+        # 3. DNS & IPv6 Seal
+        force_dns = bool(sp.get("force_tor_dns", True))
+        anti_leak = bool(sp.get("presets", {}).get("anti_leak", True))
+        ipv6_sealed = self.s.get("vpn") or self.s.get("block_ipv6") or ks["mode"] != "off"
+        if force_dns and anti_leak and ipv6_sealed:
+            checks.append({"id": "dns_ipv6", "title": "DNS, IPv6 & WebRTC/DoT Seal", "status": "ok",
+                           "detail": "DNS forced via Tor (AAAA/SVCB/HTTPS suppressed), dual-stack IPv6 rejected, STUN/DoT/mDNS blocked"})
+        else:
+            missing = []
+            if not force_dns:
+                missing.append("Force Tor DNS off")
+            if not anti_leak:
+                missing.append("Anti-Leak Shield off")
+            if not ipv6_sealed:
+                missing.append("IPv6 unblocked")
+            checks.append({"id": "dns_ipv6", "title": "DNS, IPv6 & WebRTC/DoT Seal", "status": "warn",
+                           "detail": ", ".join(missing), "fix_action": "harden_dns"})
+
+        # 4. Jailed / Strict App Integrity
+        strict_apps = [a for a in sp.get("apps", []) if a.get("enabled", True) and a.get("action") == "tor_strict"]
+        app_issues = []
+        for a in strict_apps:
+            if a.get("match_type") == "name" or not a.get("path"):
+                app_issues.append(f"{a.get('name')}: path not pinned (name-only cannot be locked by OS firewall)")
+        if not WIN and strict_apps and os.path.exists("/sys/fs/cgroup/cgroup.controllers"):
+            res = self.ks.attach_running_to_jail(strict_apps) if hasattr(self.ks, "attach_running_to_jail") else {"warnings": []}
+            app_issues.extend(res.get("warnings", []))
+        if not strict_apps:
+            checks.append({"id": "apps", "title": "Strict App Jail Integrity", "status": "ok", "detail": "No per-app Tor-Strict rules configured (Whole-System rules apply)"})
+        elif app_issues:
+            checks.append({"id": "apps", "title": "Strict App Jail Integrity", "status": "warn", "detail": "; ".join(app_issues[:3])})
+        else:
+            checks.append({"id": "apps", "title": "Strict App Jail Integrity", "status": "ok", "detail": f"{len(strict_apps)} strict app(s) path-pinned and verified"})
+
+        summary = "fail" if any(c["status"] == "fail" for c in checks) else ("warn" if any(c["status"] == "warn" for c in checks) else "ok")
+        return {"summary": summary, "checks": checks}
+
     def after_connect(self):
         time.sleep(12)
         try:
@@ -979,7 +1749,7 @@ class App:
         self.run_speed()
         if self.proc:  # keep a fresh reserve for next time, fetched safely through Tor
             via = f"http://{LOCAL}:{HTTP}"
-            found = {l: ["Tor Project"] for l in fetch_bridges(via, self.log)[:10]}
+            found = {l: ["Tor Project"] for l in fetch_bridges(via, self.log, allow_direct=False)[:10]}
             if self.s.get("community", True) and len(clean_bridges(self.s["bridges"])) < 40:
                 for l, v in fetch_public(via, self.log).items():
                     if len(v) > 1:  # in the background only take bridges confirmed by two lists
@@ -988,7 +1758,7 @@ class App:
             self.add_public([l for l in found if l not in cur][:15], found)
 
     def status(self, t, c):
-        self.after(0, lambda: self.render(t, c))
+        self.render(t, c)
         if self.sid:
             db("UPDATE sessions SET status=? WHERE id=?", (t, self.sid))
 
@@ -997,51 +1767,72 @@ class App:
         if self.state_ == "busy" and not self.proc:
             return  # still starting up
         self.save_settings()
-        if self.proc:
-            self.stop()
+        if self.proc or self.state_ == "busy":
+            self.stop(reason="user")
             return
         try:
             apply_ports(str(self.s["listen"]).strip(), str(self.s["socks"]).strip(), str(self.s["http"]).strip())
         except ValueError as e:
             self.render(f"Bad IP/port: {e}", "red")
             return
-        if (self.s["vpn"] or self.s["block_ipv6"]) and not is_admin() and not WIN:
-            threading.Thread(target=self.relaunch_root, daemon=True).start()
-        elif (self.s["vpn"] or self.s["block_ipv6"]) and not is_admin():
+        ks_on = self.s.get("ks_mode", "off") != "off"
+        if ks_on and not self.s.get("vpn"):
+            self.s["vpn"] = True
+            self.save_settings()
+        need_admin = self.s["vpn"] or self.s["block_ipv6"] or ks_on
+        if need_admin and not is_admin() and not WIN:
+            threading.Thread(target=self.relaunch_root, args=(["--connect"],), daemon=True).start()
+        elif need_admin and not is_admin():
             # relaunch elevated; settings were just saved so the new window has them
-            if ctypes.windll.shell32.ShellExecuteW(None, "runas", *self_cmd(), None, 1) > 32:
+            extra = f'--home "{HOME}" --connect'
+            if ctypes.windll.shell32.ShellExecuteW(None, "runas", *self_cmd(extra), None, 1) > 32:
                 self.closing = True  # the elevated copy takes over; close this one off the JS-call thread
                 threading.Thread(target=self.win.destroy, daemon=True).start()
             else:
-                self.render("Admin rights needed for VPN / IPv6 block", "red")
+                self.render("Admin rights needed for VPN / Kill Switch / IPv6 block", "red")
         else:
             self.cancelled = False
+            self.stop_reason = None
             self.render("Starting...", "orange")
             threading.Thread(target=self.start, daemon=True).start()
 
-    def start(self):
+    def start(self, truncate_log=True):
+        self.session_gen += 1
+        my_gen = self.session_gen
+        self.stop_reason = None
         try:
-            open(LOG, "w").close()
+            if truncate_log:
+                open(LOG, "w").close()
             lines = clean_bridges(self.s["bridges"])
+            ks_mode = self.s.get("ks_mode", "off")
+            if ks_mode != "off":
+                self.s["vpn"] = True
             vpn, cc = self.s["vpn"], COUNTRIES[self.s["country"]]
             self.sid = db("INSERT INTO sessions(start, mode, country, status) VALUES(?,?,?,?)",
                           (now(), "VPN" if vpn else "proxy", self.s["country"], "connecting"))
             if self.s["block_ipv6"]:
                 block_ipv6(True)
                 self.log("IPv6 blocked (firewall rule)")
-            kill_stale_tor()
+            kill_stale_processes()
             self.port_busy = False
             global SOCKS, HTTP, DNS_PORT  # busy port (Tor Browser, another proxy...) -> use the next free one for this session
             old = (SOCKS, HTTP, DNS_PORT)
             SOCKS = free_port(SOCKS)
             HTTP = free_port(HTTP, (SOCKS,))
             if vpn:
-                DNS_PORT = free_port(DNS_PORT, (), socket.SOCK_DGRAM)
+                DNS_PORT = free_port(DNS_PORT, (SOCKS, HTTP), socket.SOCK_DGRAM, host="127.0.0.1")
             if old != (SOCKS, HTTP, DNS_PORT):
                 self.log(f"ports busy, using SOCKS {SOCKS}, HTTP {HTTP}, DNS {DNS_PORT} instead of {old}")
+            self.upstream_dns = split_engine.detect_upstream_dns() if vpn else None
             tor, pt = ensure_tor(self.log)
             self.log(f"tor: {tor}, transports: {pt}")
             builtin = builtin_bridges()
+            tor_paths = self._tor_binary_paths(tor, pt)
+            if ks_mode != "off":
+                all_cands = lines + [l for v in builtin.values() for l in v]
+                has_host_bridge = any((t := bridge_target(l)) is None or t[2] for l in all_cands)
+                self._arm_ks_locked("Connecting through Tor", connecting_hostname_bridge=has_host_bridge, tor_paths=tor_paths)
+                self.push(ks=self.ks_status())
             # memory: the bridges that connected last time go first, before any testing
             known = set(lines).union(*builtin.values())
             good = [l for l in self.s.get("last_good", []) if l in known] if lines else []
@@ -1059,12 +1850,19 @@ class App:
                 tiers = [("direct Tor", [])]
             else:
                 rest = [l for l in lines if l not in good]
-                self.status("Testing bridges...", "orange")
-                res = probe_all(rest)
-                self.log("bridge test: " + ", ".join(f"{l.split()[0]} {res[l] if res[l] is not None else '?'}"
-                                                     for l in rest))
-                tiers = plan_tiers(rest, res, {k: [l for l in v if l not in good] for k, v in builtin.items()},
-                                   self.s.get("stats"), public=self.s.get("community", True))
+                if ks_mode == "system":
+                    res = {l: 100 for l in rest if bridge_target(l) is not None}
+                    for l in rest:
+                        res.setdefault(l, None)
+                    tiers = plan_tiers(rest, res, {k: [l for l in v if l not in good] for k, v in builtin.items()},
+                                       self.s.get("stats"), public=False)
+                else:
+                    self.status("Testing bridges...", "orange")
+                    res = probe_all(rest)
+                    self.log("bridge test: " + ", ".join(f"{l.split()[0]} {res[l] if res[l] is not None else '?'}"
+                                                         for l in rest))
+                    tiers = plan_tiers(rest, res, {k: [l for l in v if l not in good] for k, v in builtin.items()},
+                                       self.s.get("stats"), public=self.s.get("community", True))
             for n, (name, tier) in enumerate(tiers, 1):
                 if self.cancelled:
                     break
@@ -1091,7 +1889,9 @@ class App:
             self.log(f"ERROR: {e}")
             self.status(f"Error: {e}", "red")
         finally:
-            self.after(0, self.stop)
+            if self.session_gen == my_gen and self.stop_reason is None:
+                r = "user" if self.cancelled else "crash"
+                self.stop(reason=r, drop_reason="Connection failed" if self.state_ == "err" else "Tor stopped unexpectedly")
 
     def run_tor(self, tor, pt, lines, vpn, cc, label):
         """Run Tor with these bridges. True once it reached 100%; False if it stalled (killed by watchdog)."""
@@ -1111,7 +1911,10 @@ class App:
         self.status(f"Connecting... ({label})", "orange")
         # the Linux bundle's tor sits next to its own libevent/openssl
         env = {**os.environ, "LD_LIBRARY_PATH": os.path.dirname(tor)} if not WIN and tor.startswith(HOME) else None
-        proc = self.proc = popen([tor, "-f", rcp], env=env)
+        extra_kw = {"env": env}
+        if not WIN and is_admin():
+            extra_kw["group"] = killswitch.GOMMAGE_TOR_GID
+        proc = self.proc = popen([tor, "-f", rcp], **extra_kw)
         state = {"pct": -1, "t": time.time(), "done": False}
 
         def watchdog():
@@ -1138,76 +1941,119 @@ class App:
                 state["done"] = True
                 if lines:  # remember what worked so the next connect tries it first
                     self.learn(lines)
-                set_proxy(True)
-                self.status(f"Connected ({label.split(',')[0]})", "green")
-                threading.Thread(target=self.show_exit, args=(8 if vpn else 1,), daemon=True).start()
-                threading.Thread(target=self.after_connect, daemon=True).start()
-                if vpn and not self.tun:
-                    self.status("Starting VPN mode...", "orange")
-                    self.tun = True  # placeholder so a repeated 100% doesn't start it twice
-                    threading.Thread(target=self.start_vpn, args=(lines,), daemon=True).start()
-            elif not self.tun and not state["done"]:
+                if vpn:
+                    set_proxy(False)  # VPN mode must NEVER enable OS HTTP proxy (prevents TUN bypass!)
+                    if not self.starting_vpn and not self.tun:
+                        self.starting_vpn = True
+                        self.status("Starting VPN mode...", "orange")
+                        threading.Thread(target=self.start_vpn, args=(lines, label, self.session_gen), daemon=True).start()
+                else:
+                    set_proxy(True)
+                    self.status(f"Connected ({label.split(',')[0]})", "green")
+                    threading.Thread(target=self.show_exit, args=(1,), daemon=True).start()
+                    threading.Thread(target=self.after_connect, daemon=True).start()
+            elif not self.starting_vpn and not self.tun and not state["done"]:
                 self.status(f"Bootstrapping {p}% ({label})", "orange")
         self.log("tor exited")
         if not state["done"] and 0 <= state["pct"] < 75 and not self.cancelled:
             self.penalise(lines)  # the bridges never got Tor going (not a bind error, not a strict exit country)
         return state["done"]
 
-    def start_vpn(self, lines):
+    def start_vpn(self, lines, label="VPN", gen=None):
+        my_gen = self.session_gen if gen is None else gen
         try:
             ensure_singbox(self.log)
-            cidrs, domains = split_nets(self.s["bypass"])
-            if self.s["bypass_ir"]:
-                if os.path.exists(geoip()):
-                    cidrs += country_nets(geoip(), "IR")
-                else:
-                    self.log(f"no GeoIP file ({geoip()}): Iranian IPs go through Tor (install tor-geoipdb)")
-            mode = self.s["app_mode"]
-            cfg = singbox_config(mode, app_names(self.s["apps"]), cidrs, domains, (LOCAL, SOCKS))
-            path = os.path.join(HOME, "sing-box.json")
-            json.dump(cfg, open(path, "w"), indent=1)
-            self.log(f"VPN: mode={mode}, {len(cidrs)} direct IP ranges, {len(domains)} direct domains")
-            self.tun = popen([SINGBOX, "run", "-c", path, "-D", HOME], cwd=HOME)
-            threading.Thread(target=lambda: [self.log("sing-box: " + re.sub(r"\x1b\[[0-9;]*m", "", l)) for l in self.tun.stdout], daemon=True).start()
-            time.sleep(3)
-            if self.tun.poll() is not None:
-                raise RuntimeError("sing-box exited, see log")
-            run("ipconfig", "/flushdns") if WIN else run("resolvectl", "flush-caches")
-            self.status({"all": "Connected (whole system via Tor)", "except": "Connected (all apps except list)",
-                         "only": "Connected (only listed apps)"}[mode], "green")
+            if self.cancelled or self.session_gen != my_gen or not self.proc or self.proc.poll() is not None:
+                self.starting_vpn = False
+                return
+            self._spawn_singbox_only()
+            if self.cancelled or self.session_gen != my_gen or not self.proc or self.proc.poll() is not None:
+                self.starting_vpn = False
+                self.stop_vpn()
+                return
+            self.starting_vpn = False
+            mode_desc = "all via Tor" if self.s["split"].get("default_mode", "all") == "all" else "only listed apps"
+            self.status(f"Connected ({mode_desc})", "green")
+            self.push(ks=self.ks_status())
+            threading.Thread(target=self.show_exit, args=(2,), daemon=True).start()
+            threading.Thread(target=self.after_connect, daemon=True).start()
         except Exception as e:
+            self.starting_vpn = False
             self.log(f"VPN ERROR: {e}")
             self.stop_vpn()
-            self.status("Connected (browser proxy only, VPN failed)", "orange")
+            if self.cancelled or self.session_gen != my_gen:
+                return
+            if self.s.get("ks_mode", "off") != "off":
+                self.stop(reason="crash", drop_reason=f"VPN failed: {e}")
+            else:
+                set_proxy(True)
+                self.status("Connected (browser proxy only, VPN failed)", "orange")
 
     def stop_vpn(self):
         t, self.tun = self.tun, None
+        self.clash = None
         if isinstance(t, subprocess.Popen) and t.poll() is None:
             t.terminate()  # sing-box removes its adapter and routes on exit
+            try:
+                t.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                t.kill()
+        sb_cfg = os.path.join(self._runtime_dir(), "sing-box.json")
+        try:
+            if os.path.exists(sb_cfg):
+                os.remove(sb_cfg)
+        except OSError:
+            pass
 
-    def stop(self):
-        self.cancelled = True
-        self.stop_vpn()
-        p, self.proc = self.proc, None
-        if p and p.poll() is None:
-            kill_tree(p)
-        set_proxy(False)
-        if self.s["block_ipv6"] or is_admin():
-            block_ipv6(False)
-        if self.sid:
-            db("UPDATE sessions SET end=? WHERE id=?", (now(), self.sid))
-            self.sid = None
-        self.push(exit=None, gemini=None, speed="", down=None, up=None)
-        if self.state_ != "err":
-            self.render("Disconnected", "red")
+    def stop(self, reason="user", drop_reason="Tunnel dropped"):
+        with self.lock:
+            if self.state_ == "locked" and reason == "crash" and self.stop_reason == "crash":
+                return
+            self.stop_reason = reason
+            self.cancelled = True
+            self.starting_vpn = False
+            self.stop_vpn()
+            p, self.proc = self.proc, None
+            if p and p.poll() is None:
+                kill_tree(p)
+            set_proxy(False)
+            if self.sid:
+                db("UPDATE sessions SET end=? WHERE id=?", (now(), self.sid))
+                self.sid = None
+            self.push(exit=None, gemini=None, speed="", down=None, up=None)
 
-    def relaunch_root(self):
+            ks_mode = self.s.get("ks_mode", "off")
+            ks_persist = bool(self.s.get("ks_persistent", False))
+            if ks_mode != "off" and self.ks.mode != "off":
+                if reason == "crash":
+                    self.ks.lock_tunnel(drop_reason)
+                    self.render(f"Connection Locked ({drop_reason})", "locked")
+                    self.push(ks=self.ks_status())
+                    return
+                if reason == "user" and ks_persist:
+                    self.ks.lock_tunnel("Persistent Kill Switch locked")
+                    self.render("Network Locked (Persistent Kill Switch)", "locked")
+                    self.push(ks=self.ks_status())
+                    return
+                if reason == "quit" and ks_persist:
+                    self.ks.lock_tunnel("Persistent Kill Switch active")
+                    return
+                self.ks.disarm(force_persistent=False)
+                self.push(ks=self.ks_status())
+
+            if self.s["block_ipv6"] or is_admin():
+                block_ipv6(False)
+            if self.state_ != "err":
+                self.render("Disconnected", "red")
+
+    def relaunch_root(self, extra_flags=()):
         """Linux: run this app again as root via pkexec (polkit asks for the password); this window waits hidden
         and closes once the root copy has exited, or comes back if the password was refused."""
-        keep = [f"{k}={os.environ[k]}" for k in ("DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR")
+        keep = [f"{k}={os.environ[k]}" for k in ("DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR",
+                                                "DBUS_SESSION_BUS_ADDRESS", "XDG_CURRENT_DESKTOP", "LANG")
                 if k in os.environ]
         keep += [f"GOMMAGE_HOME={HOME}", "PYTHONPATH=" + os.pathsep.join(p for p in sys.path if p)]
-        cmd = ["pkexec", "env", *keep, sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
+        cmd = ["pkexec", "env", *keep, sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)]) + list(extra_flags)
         self.win.hide()
         try:
             rc = subprocess.run(cmd).returncode
@@ -1215,7 +2061,7 @@ class App:
             rc = 127
         if rc in (126, 127):  # dismissed / not authorised / no pkexec
             self.win.show()
-            self.render("Root needed for VPN / IPv6 block (or run: sudo -E python3 gommage.py)", "red")
+            self.render("Root needed for VPN / Kill Switch / IPv6 block (or run: sudo -E python3 gommage.py)", "red")
             return
         self.s = load_settings()  # the root copy learned bridges/stats; don't overwrite them on close
         self.closing = True
@@ -1248,21 +2094,35 @@ class App:
 
     def quit_app(self):
         self.closing = True
+        if hasattr(self, "_push_q"):
+            self._push_q.put(None)
         if WIN:
             self.tray.stop()
         self.save_settings()
-        self.stop()
+        self.stop(reason="quit")
         self.give_back()
 
 
 if __name__ == "__main__":
-    # self-checks of the parsers
+    # self-checks of the parsers and split/killswitch compilers (never invokes sing-box binary unconditionally)
     assert clean_bridges("Bridge webtunnel a\n\n# x\n webtunnel b ") == ["webtunnel a", "webtunnel b"]
     assert app_names("C:\\x\\Telegram.exe\n# c\nchrome.exe") == ["Telegram.exe", "chrome.exe"]
-    _r = singbox_config("only", ["Telegram.exe"], [], [], ("127.0.0.1", 9050))["route"]
-    assert _r["final"] == "direct" and {"process_name": ["Telegram.exe"], "outbound": "tor"} in _r["rules"]
-    _r = singbox_config("except", ["x.exe"], ["5.0.0.0/8"], ["ir"], ("127.0.0.1", 9050))["route"]
-    assert _r["final"] == "tor" and _r["rules"][1]["process_name"] == TOR_PROCS and _r["rules"][-1]["action"] == "reject"
+    _legacy = {"app_mode": "only", "apps": "Telegram.exe\nC:\\x\\Signal.exe", "bypass": "5.0.0.0/8 # lan\ndigikala.com", "bypass_ir": False}
+    _migrated, _ = split_engine.migrate_settings(_legacy)
+    assert _migrated["split"]["default_mode"] == "only" and _migrated["split"]["presets"]["bypass_ir"] is False
+    assert len(_migrated["split"]["apps"]) == 2 and _migrated["split"]["apps"][1]["match_type"] == "path"
+    assert split_engine.test_route(_migrated["split"], app_name="Telegram.exe", host="example.com")["action"] == "tor"
+    assert split_engine.test_route(_migrated["split"], app_name="other.exe", host="example.com")["action"] == "direct"
+    _sb_cfg = split_engine.build_singbox_config(
+        _migrated["split"], {k: f"/tmp/{k}.json" for k in ("block_apps", "strict_apps_lan", "strict_apps_nolan", "strict_apps_all", "tor_apps", "direct_apps", "block_nets", "block_doms", "tor_nets", "direct_nets", "direct_doms")},
+        ("127.0.0.1", 9050), 9053, [], TOR_PROCS, 19090, "sec", upstream_dns="8.8.8.8", ks_mode="system", ks_allow_lan=False, ks_allow_direct=False
+    )
+    assert _sb_cfg["route"]["final"] == "tor" and _sb_cfg["dns"]["servers"][0]["detour"] == "direct"
+    assert _sb_cfg["route"]["rules"][1]["rule_set"] == ["block_apps"] and _sb_cfg["route"]["rules"][2]["action"] == "hijack-dns"
+    if WIN:
+        killswitch.self_check_abi()
+    _nft_s = killswitch.LinuxNftKillSwitch(HOME).build_nft_script("system", tunnel_open=False, allow_lan=False)
+    assert "table inet gommage_ks" in _nft_s and "counter drop" in _nft_s and "table inet gommage " not in _nft_s
     apply_ports("0.0.0.0", "9150", "8119")
     assert (LISTEN, LOCAL, SOCKS, HTTP) == ("0.0.0.0", "127.0.0.1", 9150, 8119)
     for bad in (("1.2.3", "9050", "8118"), ("127.0.0.1", "9050", "9050"), ("127.0.0.1", str(DNS_PORT), "8118"), ("127.0.0.1", "x", "1")):
