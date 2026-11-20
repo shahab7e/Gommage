@@ -1311,9 +1311,36 @@ class LinuxNftKillSwitch:
         _run_cmd(["ss", "-4", "-K", "state", "established", "not", "dst", "127.0.0.0/8"])
         _run_cmd(["ss", "-6", "-K", "state", "established", "not", "dst", "::1"])
 
+    def kill_jailed_sockets(self, pids=None) -> None:
+        """A socket keeps the cgroup it was created in, so connections an app opened before it joined the jail bypass the
+        drop rule and stay alive (the app 'still has internet' with the tunnel down). Destroy those TCP sockets so the
+        app reconnects inside the jail."""
+        if not shutil.which("ss") or os.geteuid() != 0:
+            return
+        if pids is None:
+            try:
+                with open(os.path.join(JAIL_CGROUP, "cgroup.procs")) as f:
+                    pids = {int(x) for x in f.read().split()}
+            except (OSError, ValueError):
+                return
+        if not pids:
+            return
+        r = _run_cmd(["ss", "-tanpH"])
+        if not r or r.returncode != 0:
+            return
+        for line in r.stdout.splitlines():
+            f = line.split()
+            if len(f) < 6 or f[0] == "LISTEN" or f[4].startswith(("127.", "[::1]")):
+                continue
+            m = re.search(r"pid=(\d+)", f[5])
+            if not m or int(m.group(1)) not in pids:
+                continue
+            lport, rport = f[3].rsplit(":", 1)[-1], f[4].rsplit(":", 1)[-1]
+            _run_cmd(["ss", "-K", "-tn", "sport", "=", f":{lport}", "and", "dport", "=", f":{rport}"])
+
     def attach_running_to_jail(self, strict_apps: list[dict]) -> dict:
         """Move matching running PIDs into gommage_jail; return jailed + unjailed audit info."""
-        jailed, warnings = [], []
+        jailed, warnings, moved = [], [], set()
         if not strict_apps or not os.path.exists("/sys/fs/cgroup/cgroup.controllers"):
             return {"jailed_pids": jailed, "warnings": warnings}
         if os.geteuid() == 0:
@@ -1334,11 +1361,14 @@ class LinuxNftKillSwitch:
                 try:
                     open(os.path.join(JAIL_CGROUP, "cgroup.procs"), "w").write(pid_s + "\n")
                     jailed.append({"pid": int(pid_s), "exe": exe})
+                    moved.add(int(pid_s))
                     warnings.append(f"{os.path.basename(exe)} (PID {pid_s}) was already running before lock; pre-existing UDP sockets may bypass cgroup until restarted via Launch Protected")
                 except OSError:
                     warnings.append(f"Could not jail running {os.path.basename(exe)} (PID {pid_s}); use Launch Protected")
             else:
                 warnings.append(f"{os.path.basename(exe)} (PID {pid_s}) is running outside gommage_jail")
+        if moved:
+            self.kill_jailed_sockets(moved)
         return {"jailed_pids": jailed, "warnings": warnings}
 
     def arm(
@@ -1423,6 +1453,8 @@ class LinuxNftKillSwitch:
             force_tor_dns=bool(self._last_args.get("force_tor_dns", True)),
             connecting_hostname_bridge=connecting_hostname_bridge,
         )
+        if self.mode == "apps":
+            self.kill_jailed_sockets()
         self.locked = True
         self.reason = reason
         write_ks_state(self.home, True, self.mode, self.persistent, True, reason)

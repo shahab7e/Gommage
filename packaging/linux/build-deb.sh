@@ -48,7 +48,7 @@ Priority: optional
 Architecture: amd64
 Maintainer: Gommage <190859988+shahab7e@users.noreply.github.com>
 Depends: python3 (>= 3.10), python3-gi, gir1.2-gtk-3.0, gir1.2-webkit2-4.1 | gir1.2-webkit2-4.0, policykit-1 | pkexec
-Recommends: nftables, iproute2
+Recommends: nftables, iproute2, gir1.2-ayatanaappindicator3-0.1
 Homepage: https://github.com/shahab7e/Gommage
 Description: One-tap Tor client built for heavy censorship
  Connects to Tor through bridges (your own, public lists, Tor's built-ins),

@@ -32,15 +32,151 @@ else:  # GOMMAGE_HOME: set by relaunch_root; under sudo, resolve the desktop use
         _xdg = os.path.join(split_engine.resolve_user_home_linux(), ".config")
     HOME = os.environ.get("GOMMAGE_HOME") or os.path.join(_xdg, "Gommage")
 
+_LOCK_FD = None
+
+
+def ctl_path():
+    return os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "gommage-ui.sock")
+
+
+def make_indicator(on_open, on_quit):
+    """Linux tray icon (AppIndicator, which GNOME/Zorin/KDE show); None when the library or a tray host is missing."""
+    try:
+        import gi
+        gi.require_version("Gtk", "3.0")
+        gi.require_version("AyatanaAppIndicator3", "0.1")
+        from gi.repository import Gtk, AyatanaAppIndicator3 as AI
+        if not Gtk.init_check()[0]:
+            return None  # no display: creating widgets would abort the process
+        ind = AI.Indicator.new_with_path("gommage", "icon", AI.IndicatorCategory.APPLICATION_STATUS,
+                                         os.path.join(APP_DIR, "assets"))
+        ind.set_title("Gommage")
+        menu = Gtk.Menu()
+        for n, (label, cb) in enumerate((("Open Gommage", on_open), ("Quit", on_quit))):
+            item = Gtk.MenuItem(label=label)
+            item.connect("activate", lambda _i, cb=cb: cb())
+            menu.append(item)
+            if n == 0:
+                ind.set_secondary_activate_target(item)
+        menu.show_all()
+        ind.set_menu(menu)
+        ind.set_status(AI.IndicatorStatus.ACTIVE)
+        return ind
+    except Exception:
+        return None
+
+
+def _tray_for_root_child(keep):
+    """The window lives in the root copy, which can't use the user's D-Bus session; so this (user) process owns the tray
+    icon and tells the root copy over a socket. Returns a function that stops the tray."""
+    done, box = threading.Event(), {}
+
+    def send(cmd):
+        c = socket.socket(socket.AF_UNIX)
+        try:
+            c.settimeout(2)
+            c.connect(ctl_path())
+            c.sendall(cmd)
+        except OSError:
+            if cmd == b"quit":
+                os._exit(0)  # no root copy to talk to (still at the password prompt): just leave
+        finally:
+            c.close()
+
+    def loop():
+        box["ind"] = make_indicator(lambda: send(b"show"), lambda: send(b"quit"))
+        done.set()
+        if box["ind"]:
+            from gi.repository import Gtk
+            Gtk.main()
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+    done.wait(5)
+    if not box.get("ind"):
+        return lambda: None
+    keep.append("GOMMAGE_TRAY=1")
+
+    def stop():
+        from gi.repository import GLib, Gtk
+        box["ind"] = None
+        GLib.idle_add(Gtk.main_quit)
+        t.join(3)
+    return stop
+
+
+def acquire_instance_lock():
+    """Linux: one GUI per privilege level (the user's window, the root copy pkexec starts). Without this, a second
+    launch ran its own kill_stale_processes() and killed the first one's tor, and they fought over HOME and the ports."""
+    global _LOCK_FD
+    if WIN:
+        return True
+    import fcntl
+    uid = os.geteuid()
+    base = "/run" if uid == 0 else (os.environ.get("XDG_RUNTIME_DIR") or "/tmp")
+    try:
+        fd = os.open(os.path.join(base, f"gommage-{uid}.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    except OSError:
+        return True  # can't lock (odd /tmp, read-only /run): better to start than to refuse
+    _LOCK_FD = fd  # held for the life of the process; not inherited by pkexec (close_fds)
+    return True
+
+
+def repair_home_owner():
+    """Linux, non-root: a root copy that was killed leaves root-owned files in HOME, and then settings/log/torrc can't
+    be written. Take them back with one polkit prompt (the root copy normally does it on quit)."""
+    if WIN or os.geteuid() == 0 or not os.path.isdir(HOME) or not shutil.which("pkexec"):
+        return
+    me = os.getuid()
+    for d, dirs, files in os.walk(HOME):
+        if any(os.lstat(os.path.join(d, n)).st_uid != me for n in dirs + files if os.path.lexists(os.path.join(d, n))) \
+                or os.lstat(d).st_uid != me:
+            try:
+                subprocess.run(["pkexec", "chown", "-R", f"{me}:{os.getgid()}", HOME], timeout=120)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            return
+
+
 if __name__ == "__main__":
     killswitch.handle_cli_early(sys.argv, HOME, os.path.abspath(__file__))
+    if not acquire_instance_lock():
+        msg = "Gommage is already running (check the other window, or wait if it is asking for the password)."
+        print(msg, file=sys.stderr)
+        if shutil.which("notify-send"):
+            subprocess.run(["notify-send", "Gommage", msg])
+        sys.exit(3)
+    if not WIN and os.geteuid() != 0 and "--no-root" not in sys.argv and shutil.which("pkexec"):
+        # ask for the password once, here, and run the whole app as root: VPN, Kill Switch and IPv6 block then need no
+        # further prompts and no window swapping. If it is refused, carry on as a normal user (proxy mode only).
+        _keep = [f"{k}={os.environ[k]}" for k in ("DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR",
+                                                 "DBUS_SESSION_BUS_ADDRESS", "XDG_CURRENT_DESKTOP", "LANG") if k in os.environ]
+        _keep += [f"GOMMAGE_HOME={HOME}", "PYTHONPATH=" + os.pathsep.join(p for p in sys.path if p)]
+        try:
+            os.makedirs(HOME, exist_ok=True)
+            _out = open(os.path.join(HOME, "root.log"), "w")  # the root copy's errors, readable by you
+        except OSError:
+            _out = None
+        _stop_tray = _tray_for_root_child(_keep)
+        _t0 = time.time()
+        try:
+            _rc = subprocess.run(["pkexec", "env", *_keep, sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
+                                 + [a for a in sys.argv[1:]], stdout=_out, stderr=subprocess.STDOUT if _out else None).returncode
+        except OSError:
+            _rc = 127
+        if _rc not in (126, 127) and not (_rc != 0 and time.time() - _t0 < 8):  # crashed at once: fall back to a user window
+            sys.exit(_rc)
+        _stop_tray()  # carrying on in this process: it makes its own tray icon
+    repair_home_owner()
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))  # .deb install vendors pywebview here
 import webview
 if WIN:
     import pystray
     from PIL import Image
-VERSION = "1.2.0"  # bump with every release; the app compares it with the latest GitHub release tag
+VERSION = "1.2.1"  # bump with every release; the app compares it with the latest GitHub release tag
 REPO = "shahab7e/Gommage"
 SOCKS = 9050  # defaults; overwritten from settings by apply_ports()
 HTTP = 8118  # HTTPS CONNECT proxy: browsers resolve DNS through Tor (plain SOCKS via WinINET leaks/breaks DNS)
@@ -880,6 +1016,8 @@ class App:
         self._clash_fails = 0
         self._circ_missing_since = None
         self._ks_tick = 0
+        self._last_exit_fp = None
+        self._last_exit_cid = None
         relink_autostart = migrate_old_name()
         self.s = load_settings()
         if relink_autostart and self.s["autostart"]:
@@ -888,6 +1026,12 @@ class App:
             self.s["country"] = "Any"
         self.ks = killswitch.create_killswitch(HOME, self.log)
         self.ks.reconcile_startup(self.s)
+        if not WIN and is_admin():
+            self.give_back()  # whatever happens to this root copy later, the files are already the user's
+            import atexit
+            atexit.register(self.give_back)
+            for sig in (signal.SIGTERM, signal.SIGHUP):
+                signal.signal(sig, lambda n, _f: (self.give_back(), signal.signal(n, signal.SIG_DFL), os.kill(os.getpid(), n)))
         if "--arm-ks" in sys.argv and is_admin() and self.s.get("ks_mode", "off") != "off":
             try:
                 self._arm_ks_locked("Kill Switch armed")
@@ -910,11 +1054,101 @@ class App:
                 pystray.MenuItem("Unlock Kill Switch", lambda: threading.Thread(target=self.unlock_killswitch, daemon=True).start()),
                 pystray.MenuItem("Quit", self.quit_from_tray)))
             self.tray.run_detached()
+        self.tray_ok = WIN
+        if not WIN:
+            self._init_linux_tray()
         self.win.events.loaded += self._on_loaded
         threading.Thread(target=self._push_loop, daemon=True).start()
         threading.Thread(target=self.traffic, daemon=True).start()
 
+    def _init_linux_tray(self):
+        """Closing the window hides it to the tray (like Windows) when a tray icon exists; otherwise it quits."""
+        if is_admin():
+            threading.Thread(target=self._jail_watcher, daemon=True).start()
+            if os.environ.get("GOMMAGE_TRAY") == "1":
+                threading.Thread(target=self._ctl_server, daemon=True).start()
+        else:
+            self._tray_ind = make_indicator(self.present, self.quit_from_tray)
+            self.tray_ok = self._tray_ind is not None
+
+    def _jail_watcher(self):
+        """Strict Apps Only: attach_running_to_jail only ran at arm time, so an app started later (closed, then opened
+        again) ran outside the jail and connected freely. Sweep /proc and put every matching process in the jail."""
+        while not self.closing:
+            time.sleep(0.5)
+            try:
+                if self.ks.mode == "apps" and hasattr(self.ks, "attach_running_to_jail"):
+                    apps = [a for a in self.s.get("split", {}).get("apps", [])
+                            if a.get("enabled", True) and a.get("action") == "tor_strict"]
+                    if apps:
+                        self.ks.attach_running_to_jail(apps)
+            except Exception:
+                pass
+
+    def _ctl_server(self):
+        """Root copy: the user's tray process sends 'show' / 'quit' here."""
+        path = ctl_path()
+        try:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            srv = socket.socket(socket.AF_UNIX)
+            srv.bind(path)
+            os.chmod(path, 0o600)
+            uid = os.environ.get("PKEXEC_UID") or os.environ.get("SUDO_UID")
+            if uid and uid.isdigit():
+                os.chown(path, int(uid), -1)
+            srv.listen(4)
+        except OSError as e:
+            self.log(f"tray control socket failed: {e}")
+            return
+        self.tray_ok = True
+        while not self.closing:
+            try:
+                c, _ = srv.accept()
+                with c:
+                    cmd = c.recv(64).strip()
+            except OSError:
+                continue
+            if cmd == b"show":
+                self.present()
+            elif cmd == b"quit":
+                self.quit_from_tray()
+        srv.close()
+
+    def present(self):
+        if getattr(self, "_elevating", False):
+            return
+        self.win.show()
+        try:
+            from gi.repository import GLib
+            from webview.platforms.gtk import BrowserView
+            GLib.idle_add(BrowserView.instances[self.win.uid].window.present)
+        except Exception:
+            pass
+
+    def _hook_linux_drag(self):
+        """Linux: a frameless GTK window has no title bar and pywebview's drag region only works on Windows; on Wayland
+        the app can't move itself either. Ask the compositor to start the move when the top strip is pressed."""
+        if WIN or getattr(self, "_drag_hooked", False):
+            return
+        self._drag_hooked = True
+        try:
+            from webview.platforms.gtk import BrowserView
+            view = BrowserView.instances[self.win.uid]
+
+            def press(_w, ev):
+                if ev.button == 1 and ev.y < 28 and ev.x < view.window.get_size()[0] - 84:
+                    view.window.begin_move_drag(ev.button, int(ev.x_root), int(ev.y_root), ev.time)
+                    return True
+                return False
+            view.webview.connect("button-press-event", press)
+        except Exception as e:
+            self.log(f"window drag unavailable: {e}")
+
     def _on_loaded(self):
+        self._hook_linux_drag()
         if self.s["autoconnect"] or ("--connect" in sys.argv and is_admin()):
             self.after(350, self.toggle)
 
@@ -1063,6 +1297,8 @@ class App:
                 last = None
                 self._clash_fails = 0
                 self._circ_missing_since = None
+                self._last_exit_fp = None
+                self._last_exit_cid = None
                 if not WIN and self.ks.mode != "off" and self._ks_tick % 3 == 0:
                     self.push(ks=self.ks_status())
                 continue
@@ -1081,7 +1317,7 @@ class App:
                     else:
                         self._clash_fails = 0
             try:
-                r = control("GETINFO traffic/read traffic/written circuit-status")
+                r = control("GETINFO traffic/read traffic/written circuit-status stream-status")
                 cur = (int(re.search(r"traffic/read=(\d+)", r)[1]), int(re.search(r"traffic/written=(\d+)", r)[1]))
             except Exception:
                 continue
@@ -1091,6 +1327,9 @@ class App:
                     kw["ks"] = self.ks_status()
                 self.push(**kw)
             last = cur
+
+            if not self.starting_vpn and not self.reloading_vpn and not self.finding and self._ks_tick % 3 == 0:
+                self._sync_live_exit(r)
 
             if not self.starting_vpn and not self.reloading_vpn and not self.finding and (time.time() - self.last_newnym >= 15):
                 has_general = bool(re.search(r"^(?:250[-+]circuit-status=)?\d+ BUILT .*PURPOSE=GENERAL", r, re.M))
@@ -1138,8 +1377,53 @@ class App:
         except Exception as e:
             self.log(f"ERROR: {e}")
 
+    def _sync_live_exit(self, status_text: str) -> bool:
+        """Update displayed exit IP from the active Tor stream/circuit without a separate proxy hop."""
+        circuits: dict[str, str] = {}
+        for m in re.finditer(r"^(?:250[-+]circuit-status=)?(\d+)\s+BUILT\s+(\S+).*?PURPOSE=GENERAL\b", status_text, re.M):
+            cid, path = m.group(1), m.group(2)
+            hops = re.findall(r"\$([0-9A-Fa-f]{40})", path)
+            if len(hops) >= 2:
+                circuits[cid] = hops[-1].upper()
+        if not circuits:
+            return False
+
+        chosen_cid = None
+        for m in re.finditer(r"^(?:250[-+]stream-status=)?\d+\s+SUCCEEDED\s+(\d+)\s+(\S+)", status_text, re.M):
+            cid, target = m.group(1), m.group(2)
+            if cid in circuits and not target.startswith(("127.0.0.1:", "localhost:", "[::1]:")):
+                chosen_cid = cid
+        if not chosen_cid:
+            chosen_cid = self._last_exit_cid if self._last_exit_cid in circuits else list(circuits.keys())[-1]
+
+        fp = circuits.get(chosen_cid)
+        if not fp:
+            return False
+        if fp == self._last_exit_fp:
+            self._last_exit_cid = chosen_cid
+            return True
+        try:
+            ns = control(f"GETINFO ns/id/{fp}")
+            rm = re.search(r"^r\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(\S+)", ns, re.M)
+            if not rm:
+                return False
+            ip = str(ipaddress.ip_address(rm.group(1)))
+            cc = re.search(r"ip-to-country/\S+=(\w+)", control(f"GETINFO ip-to-country/{ip}"))
+            self._last_exit_fp = fp
+            self._last_exit_cid = chosen_cid
+            if self.proc:
+                self.push(exit={"ip": ip, "cc": cc.group(1).lower() if cc else ""})
+            return True
+        except Exception:
+            return False
+
     def show_exit(self, delay=1):
         time.sleep(delay)
+        try:
+            if self.s.get("vpn") and self._sync_live_exit(control("GETINFO circuit-status stream-status")):
+                return
+        except Exception:
+            pass
         try:
             via_tor = urllib.request.build_opener(urllib.request.ProxyHandler({"https": f"http://{LOCAL}:{HTTP}"}))
             ip = json.load(via_tor.open("https://check.torproject.org/api/ip", timeout=30))["IP"]
@@ -1825,6 +2109,7 @@ class App:
                 self.log(f"ports busy, using SOCKS {SOCKS}, HTTP {HTTP}, DNS {DNS_PORT} instead of {old}")
             self.upstream_dns = split_engine.detect_upstream_dns() if vpn else None
             tor, pt = ensure_tor(self.log)
+            self.give_back()  # a freshly extracted bundle is root's when we're root
             self.log(f"tor: {tor}, transports: {pt}")
             builtin = builtin_bridges()
             tor_paths = self._tor_binary_paths(tor, pt)
@@ -1914,6 +2199,12 @@ class App:
         extra_kw = {"env": env}
         if not WIN and is_admin():
             extra_kw["group"] = killswitch.GOMMAGE_TOR_GID
+            _uid = os.environ.get("PKEXEC_UID") or os.environ.get("SUDO_UID")
+            if _uid and _uid.isdigit() and int(_uid) != 0:
+                # tor refuses a DataDirectory owned by anyone but the user it runs as; HOME belongs to the desktop user
+                # (give_back), so tor runs as them too. The Kill Switch matches on its group, so nothing changes there.
+                self.give_back()
+                extra_kw["user"] = int(_uid)
         proc = self.proc = popen([tor, "-f", rcp], **extra_kw)
         state = {"pct": -1, "t": time.time(), "done": False}
 
@@ -1963,6 +2254,7 @@ class App:
         my_gen = self.session_gen if gen is None else gen
         try:
             ensure_singbox(self.log)
+            self.give_back()
             if self.cancelled or self.session_gen != my_gen or not self.proc or self.proc.poll() is not None:
                 self.starting_vpn = False
                 return
@@ -2045,10 +2337,14 @@ class App:
                 block_ipv6(False)
             if self.state_ != "err":
                 self.render("Disconnected", "red")
+            self.give_back()  # tor's data dir, log and torrc were made by root
 
     def relaunch_root(self, extra_flags=()):
         """Linux: run this app again as root via pkexec (polkit asks for the password); this window waits hidden
         and closes once the root copy has exited, or comes back if the password was refused."""
+        if getattr(self, "_elevating", False):
+            return  # a root copy is already starting or running; a second one would fight it for HOME and ports
+        self._elevating = True
         keep = [f"{k}={os.environ[k]}" for k in ("DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR",
                                                 "DBUS_SESSION_BUS_ADDRESS", "XDG_CURRENT_DESKTOP", "LANG")
                 if k in os.environ]
@@ -2056,12 +2352,22 @@ class App:
         cmd = ["pkexec", "env", *keep, sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)]) + list(extra_flags)
         self.win.hide()
         try:
-            rc = subprocess.run(cmd).returncode
+            # the root copy's stderr (tracebacks, GTK errors) goes to a file the user owns, so a failed start can be diagnosed
+            out = open(os.path.join(HOME, "root.log"), "w")
+        except OSError:
+            out = None
+        try:
+            rc = subprocess.run(cmd, stdout=out, stderr=subprocess.STDOUT if out else None).returncode
         except FileNotFoundError:
             rc = 127
-        if rc in (126, 127):  # dismissed / not authorised / no pkexec
+        finally:
+            if out:
+                out.close()
+            self._elevating = False
+        if rc in (126, 127, 3):  # dismissed / not authorised / no pkexec / another root copy already runs
             self.win.show()
-            self.render("Root needed for VPN / Kill Switch / IPv6 block (or run: sudo -E python3 gommage.py)", "red")
+            self.render("Gommage is already running as root (find its window)" if rc == 3 else
+                        "Root needed for VPN / Kill Switch / IPv6 block (or run: sudo -E python3 gommage.py)", "red")
             return
         self.s = load_settings()  # the root copy learned bridges/stats; don't overwrite them on close
         self.closing = True
@@ -2083,7 +2389,7 @@ class App:
 
     def on_closing(self):
         """Windows: the close button hides the window to the tray; the tray's Quit (or a relaunch) really closes."""
-        if WIN and not self.closing:
+        if self.tray_ok and not self.closing:
             self.win.hide()
             return False
         self.quit_app()
