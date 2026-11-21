@@ -5,7 +5,7 @@ import base64, ctypes, glob, hashlib, io, ipaddress, json, ntpath, os, queue, re
 import random, tarfile, threading, time, urllib.request, webbrowser, zipfile
 from concurrent.futures import ThreadPoolExecutor
 
-import split_engine, killswitch
+import split_engine, killswitch, l2tp
 
 WIN = sys.platform == "win32"
 FROZEN = getattr(sys, "frozen", False)  # running as the PyInstaller exe
@@ -176,7 +176,7 @@ import webview
 if WIN:
     import pystray
     from PIL import Image
-VERSION = "1.2.1"  # bump with every release; the app compares it with the latest GitHub release tag
+VERSION = "1.3.0"  # bump with every release; the app compares it with the latest GitHub release tag
 REPO = "shahab7e/Gommage"
 SOCKS = 9050  # defaults; overwritten from settings by apply_ports()
 HTTP = 8118  # HTTPS CONNECT proxy: browsers resolve DNS through Tor (plain SOCKS via WinINET leaks/breaks DNS)
@@ -932,6 +932,12 @@ class Api:
     def save_split(self, cfg):
         return self._app.save_split(cfg)
 
+    def l2tp_get(self):
+        return self._app.l2tp_view()
+
+    def l2tp_save(self, cfg):
+        return self._app.save_l2tp(cfg)
+
     def apply_split(self):
         return self._app.apply_split_live()
 
@@ -1016,6 +1022,7 @@ class App:
         self._clash_fails = 0
         self._circ_missing_since = None
         self._ks_tick = 0
+        self._l2tp_busy = False
         self._last_exit_fp = None
         self._last_exit_cid = None
         relink_autostart = migrate_old_name()
@@ -1316,6 +1323,17 @@ class App:
                             continue
                     else:
                         self._clash_fails = 0
+                if self._ks_tick % 15 == 0 and self.s.get("vpn") and self.l2tp_managed() and not self._l2tp_busy:
+                    def _redial():
+                        try:
+                            if not l2tp.connected():
+                                self.log("L2TP: link down, redialing")
+                                if self.l2tp_dial():
+                                    self.apply_split_live()  # new pppN: rebind sing-box
+                        finally:
+                            self._l2tp_busy = False
+                    self._l2tp_busy = True
+                    threading.Thread(target=_redial, daemon=True).start()
             try:
                 r = control("GETINFO traffic/read traffic/written circuit-status stream-status")
                 cur = (int(re.search(r"traffic/read=(\d+)", r)[1]), int(re.search(r"traffic/written=(\d+)", r)[1]))
@@ -1351,6 +1369,8 @@ class App:
             tmp = SETTINGS + ".tmp"
             with open(tmp, "w", encoding="utf8") as f:
                 json.dump(self.s, f, indent=1)
+            if not WIN:
+                os.chmod(tmp, 0o600)  # holds the L2TP password/PSK
             os.replace(tmp, SETTINGS)
 
     def set_bridges(self, text):
@@ -1598,6 +1618,47 @@ class App:
             out.append({"name": name, "path": cp, "match_type": "folder" if folder else "path"})
         return out
 
+    def l2tp_managed(self):
+        return bool((self.s.get("l2tp") or {}).get("enabled"))
+
+    def l2tp_dial(self):
+        """Dial the managed link and point L2TP apps at its interface (Linux: pppN, which can change on redial).
+        True when the interface changed, i.e. sing-box needs a restart to bind to it."""
+        name = l2tp.up(self.s["l2tp"], self.log)
+        if not name or name == self.s["split"].get("l2tp_iface"):
+            return False
+        with self.settings_lock:
+            self.s["split"]["l2tp_iface"] = name
+            self.save_settings()
+        return True
+
+    def l2tp_view(self):
+        c = self.s.get("l2tp") or {}
+        return {"enabled": bool(c.get("enabled")), "server": c.get("server", ""), "user": c.get("user", ""),
+                "has_password": bool(c.get("password")), "has_psk": bool(c.get("psk")),
+                "connected": l2tp.connected(), "missing": l2tp.available(), "windows": WIN}
+
+    def save_l2tp(self, cfg):
+        """Blank password/PSK keep the saved ones. Secrets are never returned to the page."""
+        if cfg.get("enabled") and (missing := l2tp.available()):
+            return {"ok": False, "error": f"L2TP: {missing}"}
+        with self.settings_lock:
+            old = self.s.get("l2tp") or {}
+            c = {"enabled": bool(cfg.get("enabled")), "server": str(cfg.get("server", "")).strip()[:253],
+                 "user": str(cfg.get("user", "")).strip()[:256],
+                 "password": l2tp.protect(cfg["password"]) if cfg.get("password") else old.get("password", ""),
+                 "psk": l2tp.protect(cfg["psk"]) if cfg.get("psk") else old.get("psk", "")}
+            self.s["l2tp"] = c
+            sp = self.s["split"]
+            if c["enabled"]:
+                sp["l2tp_iface"] = l2tp.NAME if WIN else l2tp.iface()  # Linux: known once dialed
+            elif old.get("enabled"):
+                sp["l2tp_iface"] = ""
+            self.save_settings()
+        if not c["enabled"]:
+            threading.Thread(target=l2tp.down, args=(self.log,), daemon=True).start()
+        return {"ok": True, "l2tp": self.l2tp_view(), "split": self.s["split"]}
+
     def save_split(self, cfg):
         with self.settings_lock:
             self.s["split"] = split_engine.validate_split(cfg)
@@ -1668,6 +1729,7 @@ class App:
             bool(self.s.get("ks_allow_lan", False)),
             bool(self.s.get("ks_allow_direct", False)),
             self.upstream_dns,
+            sp.get("l2tp_iface", ""),  # adds/removes the l2tp outbound: needs a sing-box restart
         )
 
     def _spawn_singbox_only(self):
@@ -1697,6 +1759,10 @@ class App:
             ks_allow_lan=bool(self.s.get("ks_allow_lan", False)),
             ks_allow_direct=bool(self.s.get("ks_allow_direct", False)),
         )
+        if self.l2tp_managed():
+            self.l2tp_dial()  # before the TUN exists, so IPsec setup can't loop into it
+        else:
+            l2tp.ensure_routes(self.s["split"].get("l2tp_iface", ""), self.log)
         sb_path = os.path.join(runtime_dir, "sing-box.json")
         with open(sb_path, "w", encoding="utf8") as f:
             json.dump(cfg, f, indent=1)
@@ -1733,6 +1799,10 @@ class App:
         run("ipconfig", "/flushdns") if WIN else run("resolvectl", "flush-caches")
 
     def apply_split_live(self):
+        if self.l2tp_managed():
+            self.l2tp_dial()
+        else:
+            l2tp.ensure_routes(self.s.get("split", {}).get("l2tp_iface", ""), self.log)
         with self.lock:
             runtime_dir = self._runtime_dir()
             rules_dir = os.path.join(runtime_dir, "rules")
@@ -2305,6 +2375,8 @@ class App:
             self.cancelled = True
             self.starting_vpn = False
             self.stop_vpn()
+            if self.l2tp_managed():
+                threading.Thread(target=l2tp.down, args=(self.log,), daemon=True).start()
             p, self.proc = self.proc, None
             if p and p.poll() is None:
                 kill_tree(p)
@@ -2425,6 +2497,14 @@ if __name__ == "__main__":
     )
     assert _sb_cfg["route"]["final"] == "tor" and _sb_cfg["dns"]["servers"][0]["detour"] == "direct"
     assert _sb_cfg["route"]["rules"][1]["rule_set"] == ["block_apps"] and _sb_cfg["route"]["rules"][2]["action"] == "hijack-dns"
+    _l2 = {**_migrated["split"], "default_mode": "all", "l2tp_iface": "MyL2TP", "apps": [{"name": "brave.exe", "match_type": "name", "action": "l2tp"}]}
+    assert split_engine.test_route(_l2, app_name="brave.exe", host="example.com", proto="udp")["action"] == "l2tp"
+    assert split_engine.test_route({**_l2, "l2tp_iface": ""}, app_name="brave.exe", host="example.com")["action"] != "l2tp"
+    _l2_cfg = split_engine.build_singbox_config(_l2, {}, ("127.0.0.1", 9050), 9053, [], TOR_PROCS, 19090, "sec")
+    assert {"type": "direct", "tag": "l2tp", "bind_interface": "MyL2TP"} in _l2_cfg["outbounds"]
+    _ri = [r.get("rule_set") for r in _l2_cfg["route"]["rules"]]
+    assert _ri.index(["l2tp_apps"]) < next(i for i, r in enumerate(_l2_cfg["route"]["rules"]) if r.get("network") == "udp" and "rule_set" not in r)
+    assert not any(o["tag"] == "l2tp" for o in split_engine.build_singbox_config(_l2, {}, ("127.0.0.1", 9050), 9053, [], TOR_PROCS, 19090, "sec", ks_mode="system")["outbounds"])
     if WIN:
         killswitch.self_check_abi()
     _nft_s = killswitch.LinuxNftKillSwitch(HOME).build_nft_script("system", tunnel_open=False, allow_lan=False)

@@ -316,6 +316,7 @@ select option { background: #1b1e25; color: #e8eaf0; }
 
 .tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 7px;
   font-size: 10px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; cursor: pointer; flex: none; }
+.tag.l2tp { background: rgba(120,160,255,.2); color: #a9c4ff; border: 1px solid rgba(120,160,255,.4); }
 .tag.tor_strict { background: rgba(62,224,143,.2); color: #7af2b7; border: 1px solid rgba(62,224,143,.4); }
 .tag.tor { background: rgba(106,169,255,.18); color: #9ec7ff; border: 1px solid rgba(106,169,255,.35); }
 .tag.direct { background: rgba(247,185,85,.18); color: #ffd68f; border: 1px solid rgba(247,185,85,.35); }
@@ -351,6 +352,8 @@ select option { background: #1b1e25; color: #e8eaf0; }
 
 details.acc { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 9px 12px; }
 details.acc summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--muted); list-style: none; display: flex; justify-content: space-between; align-items: center; }
+details.acc .sum { font-weight: 500; color: var(--muted); margin-left: 6px; }
+details.acc .sum.on { color: #7af2b7; }
 details.acc[open] summary { color: var(--text); margin-bottom: 9px; }
 
 .live-items { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
@@ -551,101 +554,122 @@ details.acc[open] summary { color: var(--text); margin-bottom: 9px; }
 
       <!-- SUBVIEW: RULES -->
       <div class="subview act" id="sv-rules">
-        <span class="label">Kill Switch (OS Firewall)</span>
-        <div class="group">
-          <div class="item">
-            <div class="grow"><b>Kill Switch Mode</b><small>Fail-closed lock on tunnel drop</small></div>
-            <select id="ks_mode">
-              <option value="off">Off</option>
-              <option value="apps">Strict Apps Only</option>
-              <option value="system">Whole System</option>
-            </select>
-          </div>
-          <div class="item">
-            <div class="grow"><b>Persistent Lock</b><small>Stay locked offline &amp; after reboot until unlocked</small></div>
-            <span class="tg" id="ks_persistent_tg" onclick="toggleKSPersistent()"></span>
-          </div>
-          <div class="item">
-            <div class="grow"><b>Force All DNS via Tor</b><small>Prevents OS DNS resolver leaks</small></div>
-            <span class="tg" id="force_tor_dns_tg" onclick="toggleSplitOpt('force_tor_dns')"></span>
-          </div>
-          <div class="item">
-            <div class="grow"><b>Allow Local Network (LAN)</b><small>Permits router &amp; local subnet access</small></div>
-            <span class="tg" id="ks_allow_lan_tg" onclick="toggleKSOption('ks_allow_lan')"></span>
-          </div>
-          <div class="item" id="ks_direct_row" style="display:none">
-            <div class="grow"><b>Allow Direct Rules in System KS</b><small>Permit sing-box direct split traffic on physical NIC</small></div>
-            <span class="tg" id="ks_allow_direct_tg" onclick="toggleKSOption('ks_allow_direct')"></span>
-          </div>
-        </div>
         <div class="btns" id="ks-actions-row" style="display:none">
           <button class="btn danger" onclick="unlockKS()">Unlock Kill Switch</button>
         </div>
 
-        <span class="label">Profile &amp; Default Policy</span>
         <div class="group">
           <div class="item">
-            <div class="grow"><b>Profile</b></div>
-            <select id="sp_profile"></select>
-          </div>
-          <div class="item">
-            <div class="grow"><b>Default Policy</b><small>Route for apps without an explicit rule</small></div>
+            <div class="grow"><b>Default route</b><small>For apps without their own rule</small></div>
             <select id="sp_default">
               <option value="all">All apps via Tor</option>
               <option value="only">Only listed apps via Tor</option>
             </select>
           </div>
         </div>
-        <div class="btns">
-          <button class="btn" onclick="saveProfile()">Save profile</button>
-          <button class="btn" onclick="exportSplit()">Export</button>
-          <button class="btn" onclick="importSplitPrompt()">Import</button>
-          <span style="flex:1"></span>
-          <button class="btn danger" onclick="resetSplit()">Reset</button>
-        </div>
 
-        <div class="label"><span>Application Rules</span><button class="btn primary mini" onclick="openPicker()">+ Add App</button></div>
+        <div class="label"><span>Apps</span><button class="btn primary mini" onclick="openPicker()">+ Add App</button></div>
         <div class="group" id="app-list"></div>
 
-        <span class="label">Security Presets</span>
-        <div class="group">
-          <div class="item"><div class="grow"><b>Iranian IPs &amp; .ir direct</b><small>Domestic sites skip Tor (Tor-Strict apps still override!)</small></div><span class="tg" id="pr_bypass_ir" onclick="togglePreset('bypass_ir')"></span></div>
-          <div class="item"><div class="grow"><b>Anti-Leak Shield</b><small>Blocks STUN/WebRTC, mDNS, LLMNR, DoT 853 leaks</small></div><span class="tg" id="pr_anti_leak" onclick="togglePreset('anti_leak')"></span></div>
-          <div class="item"><div class="grow"><b>Block Telemetry &amp; Trackers</b><small>Drops common OS &amp; app analytics domains</small></div><span class="tg" id="pr_block_telemetry" onclick="togglePreset('block_telemetry')"></span></div>
-        </div>
-
-        <span class="label">Network Rules (Domains / IPs / Ports)</span>
+        <span class="label">Sites &amp; IPs</span>
         <div class="net-add">
-          <input id="net_val" spellcheck="false" placeholder="domain.com, 1.2.3.0/24, or 3478">
-          <button class="btn primary" onclick="addNetRule()">+ Add</button>
-        </div>
-        <div class="net-add-row2">
-          <select id="net_kind" style="flex:1">
-            <option value="auto">Auto detect</option>
-            <option value="domain_suffix">Domain suffix</option>
-            <option value="domain">Exact domain</option>
-            <option value="domain_keyword">Keyword</option>
-            <option value="ip_cidr">IP / CIDR</option>
-            <option value="port">Port / Range</option>
-          </select>
-          <select id="net_action" style="flex:1">
-            <option value="direct">Direct</option>
-            <option value="tor">Tor</option>
-            <option value="block">Block</option>
-          </select>
-        </div>
-        <div class="group" id="net-list"></div>
+            <input id="net_val" spellcheck="false" placeholder="domain.com, 1.2.3.0/24, or 3478">
+            <button class="btn primary" onclick="addNetRule()">+ Add</button>
+          </div>
+          <div class="net-add-row2">
+            <select id="net_kind" style="flex:1">
+              <option value="auto">Auto detect</option>
+              <option value="domain_suffix">Domain suffix</option>
+              <option value="domain">Exact domain</option>
+              <option value="domain_keyword">Keyword</option>
+              <option value="ip_cidr">IP / CIDR</option>
+              <option value="port">Port / Range</option>
+            </select>
+            <select id="net_action" style="flex:1">
+              <option value="direct">Direct</option>
+              <option value="tor">Tor</option>
+              <option value="block">Block</option>
+            </select>
+          </div>
+          <div class="group" id="net-list"></div>
+          <details class="acc" id="bulk-acc" style="margin-top:8px">
+            <summary><span>Bulk edit direct hosts &amp; IPs</span><span>▾</span></summary>
+            <textarea id="bulk_direct" rows="4" spellcheck="false" placeholder="digikala.com&#10;5.6.7.0/24"></textarea>
+            <div class="btns" style="margin-top:8px">
+              <button class="btn" onclick="applyBulkDirect()">Replace direct network rules</button>
+            </div>
+          </details>
 
-        <details class="acc" id="bulk-acc">
-          <summary><span>Bulk import / edit direct hosts &amp; IPs</span><span>▾</span></summary>
-          <textarea id="bulk_direct" rows="4" spellcheck="false" placeholder="digikala.com&#10;5.6.7.0/24"></textarea>
+        <span class="label">Protection</span>
+          <div class="group">
+            <div class="item"><div class="grow"><b>Iranian sites direct</b><small>Iranian IPs &amp; .ir skip Tor (Lock apps still use Tor)</small></div><span class="tg" id="pr_bypass_ir" onclick="togglePreset('bypass_ir')"></span></div>
+            <div class="item"><div class="grow"><b>Anti-Leak Shield</b><small>Blocks WebRTC, mDNS, LLMNR, DoT leaks</small></div><span class="tg" id="pr_anti_leak" onclick="togglePreset('anti_leak')"></span></div>
+            <div class="item"><div class="grow"><b>Block trackers</b><small>Drops common OS &amp; app analytics</small></div><span class="tg" id="pr_block_telemetry" onclick="togglePreset('block_telemetry')"></span></div>
+            <div class="item"><div class="grow"><b>All DNS via Tor</b><small>Prevents DNS leaks</small></div><span class="tg" id="force_tor_dns_tg" onclick="toggleSplitOpt('force_tor_dns')"></span></div>
+          </div>
+
+        <span class="label">Kill Switch</span>
+          <div class="group">
+            <div class="item">
+              <div class="grow"><b>Mode</b><small>Block traffic if the tunnel drops</small></div>
+              <select id="ks_mode">
+                <option value="off">Off</option>
+                <option value="apps">Lock apps only</option>
+                <option value="system">Whole system</option>
+              </select>
+            </div>
+            <div class="item ks-opt">
+              <div class="grow"><b>Stay locked</b><small>Offline &amp; after reboot, until unlocked</small></div>
+              <span class="tg" id="ks_persistent_tg" onclick="toggleKSPersistent()"></span>
+            </div>
+            <div class="item ks-opt">
+              <div class="grow"><b>Allow local network</b><small>Router &amp; LAN devices</small></div>
+              <span class="tg" id="ks_allow_lan_tg" onclick="toggleKSOption('ks_allow_lan')"></span>
+            </div>
+            <div class="item" id="ks_direct_row" style="display:none">
+              <div class="grow"><b>Allow direct rules</b><small>Let direct &amp; L2TP traffic out in whole-system mode</small></div>
+              <span class="tg" id="ks_allow_direct_tg" onclick="toggleKSOption('ks_allow_direct')"></span>
+            </div>
+          </div>
+
+        <details class="acc" id="l2tp-acc">
+          <summary><span>L2TP connection <span class="sum" id="l2tp_sum"></span></span><span>▾</span></summary>
+          <div class="group">
+            <div id="l2tp_box" style="display:none">
+              <div class="item">
+                <div class="grow"><b>Managed by Gommage</b><small id="l2tp_status">Dials on Connect, redials if it drops</small></div>
+                <span class="tg" id="l2tp_on_tg" onclick="toggleL2tp()"></span>
+              </div>
+              <div class="item"><div class="grow"><b>Server</b></div><input id="l2tp_server" spellcheck="false" placeholder="vpn.example.com"></div>
+              <div class="item"><div class="grow"><b>Username</b></div><input id="l2tp_user" spellcheck="false" autocomplete="off"></div>
+              <div class="item"><div class="grow"><b>Password</b></div><input id="l2tp_pw" type="password" autocomplete="new-password"></div>
+              <div class="item"><div class="grow"><b>Pre-shared key</b><small id="l2tp_psk_note"></small></div><input id="l2tp_psk" type="password" autocomplete="new-password"></div>
+              <div class="item"><div class="grow"></div><button class="btn primary mini" onclick="saveL2tp()">Save</button></div>
+            </div>
+            <div class="item" id="l2tp_iface_row">
+              <div class="grow"><b>Or use your own VPN</b><small id="l2tp_iface_hint"></small></div>
+              <input id="l2tp_iface" spellcheck="false" placeholder="e.g. MyL2TP">
+            </div>
+          </div>
+          <p class="lead" style="margin:8px 2px 0">Set an app to <b>L2TP</b> in Apps to send it through this connection.</p>
+        </details>
+
+        <details class="acc">
+          <summary><span>Profiles &amp; backup</span><span>▾</span></summary>
+          <div class="group">
+            <div class="item"><div class="grow"><b>Profile</b></div><select id="sp_profile"></select></div>
+          </div>
           <div class="btns" style="margin-top:8px">
-            <button class="btn" onclick="applyBulkDirect()">Replace direct network rules</button>
+            <button class="btn" onclick="saveProfile()">Save profile</button>
+            <button class="btn" onclick="exportSplit()">Export</button>
+            <button class="btn" onclick="importSplitPrompt()">Import</button>
+            <span style="flex:1"></span>
+            <button class="btn danger" onclick="resetSplit()">Reset</button>
           </div>
         </details>
 
         <details class="acc">
-          <summary><span>Rule Simulator (Test where traffic routes)</span><span>▾</span></summary>
+          <summary><span>Test a route</span><span>▾</span></summary>
           <div style="display:flex;flex-direction:column;gap:7px">
             <input id="tst_app" spellcheck="false" placeholder="App name or full path (e.g. Telegram.exe)">
             <input id="tst_host" spellcheck="false" placeholder="Domain or IP (e.g. digikala.com or 1.1.1.1)">
@@ -739,6 +763,7 @@ details.acc[open] summary { color: var(--text); margin-bottom: 9px; }
         <option value="tor_strict">🔒 Tor Strict</option>
         <option value="tor">Tor</option>
         <option value="direct">Direct</option>
+        <option value="l2tp">L2TP</option>
         <option value="block">Block</option>
       </select>
     </div>
@@ -909,8 +934,8 @@ async function loadHistory() {
 function copyLog(b) { navigator.clipboard.writeText($("log").value); b.textContent = "Copied ✓"; setTimeout(() => b.textContent = "Copy log", 1400); }
 
 // ---- split & kill switch ----
-const ACTION_CYCLE = ["tor_strict", "tor", "direct", "block"];
-const ACTION_LABEL = { tor_strict: "🔒 Lock", tor: "Tor", direct: "Direct", block: "Block" };
+const ACTION_CYCLE = ["tor_strict", "tor", "direct", "l2tp", "block"];
+const ACTION_LABEL = { tor_strict: "🔒 Lock", tor: "Tor", direct: "Direct", l2tp: "L2TP", block: "Block" };
 
 function markSplitDirty(persist = true) {
   if (persist) api("save_split", SP);
@@ -933,9 +958,11 @@ async function applySplitLive() {
 function renderKS() {
   const mode = (KS && KS.mode && KS.mode !== "off") ? KS.mode : (S.ks_mode || "off");
   $("ks_mode").value = mode;
+  document.querySelectorAll(".ks-opt").forEach(e => e.style.display = mode === "off" ? "none" : "");
   const persist = !!(KS && KS.persistent) || !!S.ks_persistent;
   $("ks_persistent_tg").classList.toggle("on", persist);
   $("force_tor_dns_tg").classList.toggle("on", !!(SP && SP.force_tor_dns));
+  if (document.activeElement !== $("l2tp_iface")) $("l2tp_iface").value = (SP && SP.l2tp_iface) || "";
   $("ks_allow_lan_tg").classList.toggle("on", !!S.ks_allow_lan);
   $("ks_allow_direct_tg").classList.toggle("on", !!S.ks_allow_direct);
   $("ks_direct_row").style.display = mode === "system" ? "" : "none";
@@ -1063,6 +1090,36 @@ function renderSplitUI() {
 }
 
 $("sp_default").onchange = e => { SP.default_mode = e.target.value; markSplitDirty(); };
+$("l2tp_iface").onchange = e => { SP.l2tp_iface = e.target.value.trim(); markSplitDirty(); renderL2tp(); };
+let L2 = {};
+document.querySelectorAll("#sv-rules details.acc").forEach((d, i) => {
+  const k = "gommage.acc." + (d.id || i);
+  try { if (localStorage.getItem(k) === "1") d.open = true; } catch (e) {}
+  d.addEventListener("toggle", () => { try { localStorage.setItem(k, d.open ? "1" : "0"); } catch (e) {} });
+});
+function renderL2tp() {
+  $("l2tp_on_tg").classList.toggle("on", !!L2.enabled);
+  $("l2tp_server").value = L2.server || ""; $("l2tp_user").value = L2.user || "";
+  $("l2tp_pw").placeholder = L2.has_password ? "•••• saved" : "";
+  $("l2tp_psk").placeholder = L2.has_psk ? "•••• saved" : "";
+  $("l2tp_status").textContent = L2.missing ? L2.missing : L2.enabled ? (L2.connected ? "Connected · apps set to L2TP use it" : "Will dial on Connect") : "Dials on Connect, redials if it drops";
+  $("l2tp_iface_row").style.display = L2.enabled ? "none" : "";
+  const sum = $("l2tp_sum");
+  sum.textContent = L2.enabled ? (L2.connected ? "· connected" : "· on") : (SP.l2tp_iface ? "· " + SP.l2tp_iface : "· off");
+  sum.classList.toggle("on", !!(L2.enabled || SP.l2tp_iface));
+}
+async function loadL2tp() {
+  $("l2tp_box").style.display = ""; L2 = await api("l2tp_get") || {}; renderL2tp();
+  $("l2tp_psk_note").textContent = isWin ? "Stored encrypted for this Windows account" : "Kept in your settings file, readable only by you";
+  $("l2tp_iface_hint").textContent = isWin ? "Its name, if you dial it yourself" : "Its interface (e.g. ppp0), if you dial it yourself";
+}
+async function saveL2tp(enabled = L2.enabled) {
+  const r = await api("l2tp_save", { enabled, server: $("l2tp_server").value, user: $("l2tp_user").value, password: $("l2tp_pw").value, psk: $("l2tp_psk").value });
+  if (!r || !r.ok) { alert((r && r.error) || "Not saved"); return; }
+  $("l2tp_pw").value = ""; $("l2tp_psk").value = "";
+  L2 = r.l2tp; SP = r.split; renderL2tp(); renderSplitUI(); markSplitDirty(false);
+}
+function toggleL2tp() { saveL2tp(!L2.enabled); }
 $("sp_profile").onchange = e => {
   const n = e.target.value;
   SP.active_profile = n;
@@ -1260,6 +1317,7 @@ async function pollLive() {
         <button class="chip" data-live="set" data-act="tor_strict">🔒 Lock</button>
         <button class="chip" data-live="set" data-act="tor">Tor</button>
         <button class="chip" data-live="set" data-act="direct">Direct</button>
+        <button class="chip" data-live="set" data-act="l2tp">L2TP</button>
         <button class="chip" data-live="set" data-act="block">Block</button>
         <span style="flex:1"></span>
         <button class="chip" data-live="kill">Kill sockets</button>
@@ -1388,7 +1446,7 @@ window.addEventListener("pywebviewready", async () => {
   for (const id of ["bridges", "listen", "socks", "http"]) { $(id).value = S[id] ?? ""; bindText(id, v => v); }
   if (!isWin) $("autostart_label").textContent = "Start at login";
   $("log").value = d.log || ""; $("logpath").innerHTML = `Also saved to <code>${esc(d.log_path || "")}</code>`;
-  drawMap(); buildFlags(); paintToggles(); render(); renderSplitUI();
+  drawMap(); buildFlags(); paintToggles(); render(); renderSplitUI(); loadL2tp();
 });
 </script>
 </body>

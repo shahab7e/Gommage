@@ -10,7 +10,7 @@ APP="$ROOT/opt/gommage"
 
 mkdir -p "$APP/lib" "$ROOT/usr/bin" "$ROOT/usr/share/applications" "$ROOT/usr/share/icons/hicolor/256x256/apps" \
          "$ROOT/usr/share/doc/gommage" "$ROOT/DEBIAN"
-cp gommage.py split_engine.py killswitch.py ui.html "$APP/"
+cp gommage.py split_engine.py killswitch.py l2tp.py ui.html "$APP/"
 cp -r fonts assets "$APP/"
 rm -rf "$APP/assets/logo"            # design sources; the app only uses the wordmark below
 mkdir -p "$APP/assets/logo"
@@ -48,7 +48,7 @@ Priority: optional
 Architecture: amd64
 Maintainer: Gommage <190859988+shahab7e@users.noreply.github.com>
 Depends: python3 (>= 3.10), python3-gi, gir1.2-gtk-3.0, gir1.2-webkit2-4.1 | gir1.2-webkit2-4.0, policykit-1 | pkexec
-Recommends: nftables, iproute2, gir1.2-ayatanaappindicator3-0.1
+Recommends: nftables, iproute2, gir1.2-ayatanaappindicator3-0.1, network-manager-l2tp
 Homepage: https://github.com/shahab7e/Gommage
 Description: One-tap Tor client built for heavy censorship
  Connects to Tor through bridges (your own, public lists, Tor's built-ins),

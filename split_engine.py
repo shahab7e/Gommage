@@ -33,7 +33,7 @@ if WIN:
 
 SPLIT_VERSION = 1
 
-APP_ACTIONS = ("tor_strict", "tor", "direct", "block")
+APP_ACTIONS = ("tor_strict", "tor", "direct", "l2tp", "block")  # l2tp: experimental, out via the L2TP adapter
 MATCH_TYPES = ("path", "folder", "name")
 NET_KINDS = ("domain_suffix", "domain", "domain_keyword", "ip_cidr", "port")
 NET_ACTIONS = ("tor", "direct", "block")
@@ -114,6 +114,7 @@ def default_split() -> dict:
         "net_rules": [],
         "presets": {"bypass_ir": True, "anti_leak": True, "block_telemetry": False},
         "force_tor_dns": True,
+        "l2tp_iface": "",  # Windows VPN connection name (= its PPP adapter name) for "l2tp" apps
         "active_profile": "Default",
         "profiles": {},
     }
@@ -266,6 +267,7 @@ def validate_split(sp: dict, strict: bool = False) -> dict:
         "block_telemetry": bool(presets.get("block_telemetry", False)),
     }
     base["force_tor_dns"] = bool(sp.get("force_tor_dns", True))
+    base["l2tp_iface"] = str(sp.get("l2tp_iface") or "").strip()[:64]
     base["active_profile"] = str(sp.get("active_profile") or "Default")[:48]
 
     apps_in = sp.get("apps")
@@ -1027,6 +1029,7 @@ def write_rule_sets(rules_dir: str, split_cfg: dict, ir_cidrs: list[str] = ()) -
         "strict_apps_all": {"version": 2, "rules": compile_app_rules(apps, "tor_strict")},
         "tor_apps": {"version": 2, "rules": compile_app_rules(apps, "tor")},
         "direct_apps": {"version": 2, "rules": compile_app_rules(apps, "direct")},
+        "l2tp_apps": {"version": 2, "rules": compile_app_rules(apps, "l2tp")},
         "block_nets": {"version": 2, "rules": compile_net_rules(nets, "block", extra_domains=extra_block_doms)},
         "block_doms": {"version": 2, "rules": compile_net_rules(nets, "block", extra_domains=extra_block_doms, domain_only=True)},
         "tor_nets": {"version": 2, "rules": compile_net_rules(nets, "tor")},
@@ -1112,6 +1115,10 @@ def build_singbox_config(
     # 12. Direct apps (skipped under strict Whole-System Kill Switch)
     if not ks_strict_no_direct:
         rules.append({"rule_set": ["direct_apps"], "outbound": "direct"})
+    # 12b. L2TP apps: bound to the L2TP adapter, UDP/QUIC allowed (no adapter name -> they fall through to Tor)
+    l2tp_on = bool(sp["l2tp_iface"]) and not ks_strict_no_direct
+    if l2tp_on:
+        rules.append({"rule_set": ["l2tp_apps"], "outbound": "l2tp"})
 
     # 13. Private/LAN IPs (skipped if Whole-System Kill Switch blocks LAN)
     if not ks_block_lan_global:
@@ -1180,7 +1187,7 @@ def build_singbox_config(
         "outbounds": [
             {"type": "socks", "tag": "tor", "server": socks_addr[0], "server_port": int(socks_addr[1]), "version": "5"},
             {"type": "direct", "tag": "direct"},
-        ],
+        ] + ([{"type": "direct", "tag": "l2tp", "bind_interface": sp["l2tp_iface"]}] if l2tp_on else []),
         "route": {
             "auto_detect_interface": True,
             "find_process": True,
@@ -1325,6 +1332,9 @@ def test_route(
 
     if not ks_strict_no_direct and _find_matching_app(apps, "direct", q_name, q_path):
         return {"action": "direct", "reason": "Direct app rule"}
+
+    if sp["l2tp_iface"] and not ks_strict_no_direct and _find_matching_app(apps, "l2tp", q_name, q_path):
+        return {"action": "l2tp", "reason": f"L2TP app rule (via {sp['l2tp_iface']})"}
 
     if is_priv and not ks_block_lan_global:
         return {"action": "direct", "reason": "Private/LAN IP direct"}
