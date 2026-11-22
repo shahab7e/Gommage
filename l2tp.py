@@ -104,28 +104,33 @@ def iface() -> str:
     return m[1] if m else ""
 
 
+last_error = ""  # why the last managed dial failed, shown in the UI ("" once connected)
+_ERR_HINT = {"789": "IPsec rejected (check the pre-shared key)", "691": "wrong username or password",
+             "809": "server unreachable (UDP 500/4500 blocked?)", "868": "server name not found"}
+
+
 def ensure_routes(ifname: str, log=print, server: str = ""):
     """Routes so a split-tunnel L2TP link works beside the TUN:
-    1. its server goes out the real NIC: IPsec/L2TP must never enter sing-box (re-sourced ports kill the link);
-    2. a default route on the L2TP interface at a far worse metric, else bind_interface gets 'network unreachable'.
+    1. its server goes out the real NIC: IPsec/L2TP must never enter sing-box (re-sourced ports kill the link).
+       Needs no interface, so it is set BEFORE dialing, else the dial itself loops into the TUN (error 789);
+    2. a default route on the L2TP interface at a far worse metric, else bind_interface gets 'network unreachable';
+       its interface metric goes far back too, so Windows stops asking the link's DNS first (10 s per lookup).
     Neither steals traffic: sing-box's routes and the NIC's default still win for everything else."""
-    if not ifname:
-        return
+    ip = _resolve(server) if server else ""
     if WIN:
-        return _ensure_routes_win(ifname, log)
+        return _ensure_routes_win(ifname, ip, log)
     out = []
-    if server and (ip := _resolve(server)):
+    if ip and f"to {ip} lookup main" not in _sh("ip", "rule", "show").stdout:
         # sing-box's policy rules sit before the main table, so a /32 there isn't enough: send it to main first
-        if f"to {ip} lookup main" not in _sh("ip", "rule", "show").stdout:
-            r = _sh("ip", "rule", "add", "to", ip, "lookup", "main", "priority", "100")
-            if r.returncode:
-                out.append(f"server rule: {r.stderr.strip()}")
-    if "default" not in _sh("ip", "route", "show", "dev", ifname).stdout:
+        r = _sh("ip", "rule", "add", "to", ip, "lookup", "main", "priority", "100")
+        if r.returncode:
+            out.append(f"server rule: {r.stderr.strip()}")
+    if ifname and "default" not in _sh("ip", "route", "show", "dev", ifname).stdout:
         r = _sh("ip", "route", "add", "default", "dev", ifname, "metric", "9000")
         if r.returncode:
             out.append(f"adapter route: {r.stderr.strip()}")
     if out:
-        log(f"L2TP '{ifname}': {' | '.join(out)[:300]}")
+        log(f"L2TP '{ifname or server}': {' | '.join(out)[:300]}")
 
 
 def _resolve(host: str) -> str:
@@ -136,54 +141,65 @@ def _resolve(host: str) -> str:
         return ""
 
 
-def _ensure_routes_win(ifname: str, log):
+def _ensure_routes_win(ifname: str, ip: str, log):
     r = _ps(
-        f"$n={_q(ifname)}; $err=@();"
-        "try{ $srv=(Get-VpnConnection -Name $n -ErrorAction Stop).ServerAddress;"
-        " $ip=([Net.Dns]::GetHostAddresses($srv)|?{$_.AddressFamily -eq 'InterNetwork'}|select -First 1).IPAddressToString;"
+        f"$n={_q(ifname)}; $ip={_q(ip)}; $err=@();"
+        # manual mode (user's own VPN): find its server from the profile
+        "if(-not $ip -and $n){ try{ $srv=(Get-VpnConnection -Name $n -ErrorAction Stop).ServerAddress;"
+        " $ip=([Net.Dns]::GetHostAddresses($srv)|?{$_.AddressFamily -eq 'InterNetwork'}|select -First 1).IPAddressToString }catch{} };"
+        "if($ip){ try{"
         " $gw=Get-NetRoute -DestinationPrefix 0.0.0.0/0 -AddressFamily IPv4|?{$_.InterfaceAlias -notin @($n,'Gommage') -and $_.NextHop -ne '0.0.0.0'}"
         "|sort {$_.RouteMetric+(Get-NetIPInterface -InterfaceIndex $_.ifIndex -AddressFamily IPv4).InterfaceMetric}|select -First 1;"
-        " if($ip -and $gw -and -not (Get-NetRoute -DestinationPrefix ($ip+'/32') -ErrorAction SilentlyContinue)){"
+        " if($gw -and -not (Get-NetRoute -DestinationPrefix ($ip+'/32') -ErrorAction SilentlyContinue)){"
         "  New-NetRoute -DestinationPrefix ($ip+'/32') -InterfaceIndex $gw.ifIndex -NextHop $gw.NextHop -RouteMetric 1 -PolicyStore ActiveStore -ErrorAction Stop|Out-Null }"
-        "}catch{ $err+=('server route: '+$_) };"
-        "try{ $i=(Get-NetIPInterface -InterfaceAlias $n -AddressFamily IPv4 -ErrorAction Stop).ifIndex;"
+        "}catch{ $err+=('server route: '+$_) } };"
+        "if($n){ try{ $i=(Get-NetIPInterface -InterfaceAlias $n -AddressFamily IPv4 -ErrorAction Stop).ifIndex;"
         " if(-not (Get-NetRoute -InterfaceIndex $i -DestinationPrefix 0.0.0.0/0 -ErrorAction SilentlyContinue)){"
-        "  New-NetRoute -InterfaceIndex $i -DestinationPrefix 0.0.0.0/0 -RouteMetric 9000 -PolicyStore ActiveStore -ErrorAction Stop|Out-Null }"
-        "}catch{ $err+=('adapter route (is it connected?): '+$_) };"
+        "  New-NetRoute -InterfaceIndex $i -DestinationPrefix 0.0.0.0/0 -RouteMetric 9000 -PolicyStore ActiveStore -ErrorAction Stop|Out-Null };"
+        " Set-NetIPInterface -InterfaceIndex $i -InterfaceMetric 9000 -ErrorAction Stop"
+        "}catch{ $err+=('adapter route (is it connected?): '+$_) } };"
         "if($err){ Write-Output ($err -join ' | ') }"
     )
     out = (r.stdout + r.stderr).strip()
     if out:
-        log(f"L2TP '{ifname}': {out[:300]}")
+        log(f"L2TP '{ifname or ip}': {out[:300]}")
 
 
 # ---------- managed connection ----------
 def up(cfg: dict, log=print) -> str:
     """(Re)create the hidden profile from cfg, dial it, set routes. Returns the interface name, '' on failure."""
+    global last_error
     if missing := available():
+        last_error = missing
         log(f"L2TP: {missing}")
         return ""
     if connected():
+        last_error = ""
         ensure_routes(iface(), log, cfg.get("server", ""))
         return iface()
     try:
         pw, psk = unprotect(cfg.get("password", "")), unprotect(cfg.get("psk", ""))
     except (OSError, ValueError):
-        log("L2TP: saved password/PSK can't be decrypted (different account?); enter them again")
+        last_error = "saved password/PSK can't be decrypted; enter them again"
+        log(f"L2TP: {last_error}")
         return ""
     if not (cfg.get("server") and cfg.get("user") and pw and psk):
-        log("L2TP: server, username, password and PSK are all needed")
+        last_error = "server, username, password and PSK are all needed"
+        log(f"L2TP: {last_error}")
         return ""
-    ok = _up_win(cfg, pw, psk, log) if WIN else _up_linux(cfg, pw, psk, log)
-    if not ok:
+    ensure_routes("", log, cfg["server"])  # server bypass first: the dial must not go into the TUN
+    err = _up_win(cfg, pw, psk, log) if WIN else _up_linux(cfg, pw, psk, log)
+    if err:
+        last_error = err
         return ""
+    last_error = ""
     log(f"L2TP: connected to {cfg['server']}")
     name = iface()
     ensure_routes(name, log, cfg["server"])
     return name
 
 
-def _up_win(cfg, pw, psk, log) -> bool:
+def _up_win(cfg, pw, psk, log) -> str:
     r = _ps(
         f"Remove-VpnConnection -Name {_q(NAME)} -Force -ErrorAction SilentlyContinue;"
         f"Add-VpnConnection -Name {_q(NAME)} -ServerAddress {_q(cfg['server'])} -TunnelType L2tp -L2tpPsk {_q(psk)}"
@@ -191,27 +207,27 @@ def _up_win(cfg, pw, psk, log) -> bool:
     )
     if r.returncode:
         log(f"L2TP: profile not created: {r.stderr.strip()[:300]}")
-        return False
+        return "profile not created (see log)"
     # ponytail: rasdial takes the password as an argument (visible to same-user processes for ~a second);
     # the RasDial API via ctypes would avoid that if it ever matters
     r = subprocess.run(["rasdial", NAME, cfg["user"], pw], capture_output=True, text=True, creationflags=NOFLASH)
     if r.returncode:
         log(f"L2TP: dial failed (code {r.returncode}): {r.stdout.strip().splitlines()[-1:] or ''}")
-        return False
-    return True
+        return f"error {r.returncode}: " + _ERR_HINT.get(str(r.returncode), "dial failed (see log)")
+    return ""
 
 
-def _up_linux(cfg, pw, psk, log) -> bool:
+def _up_linux(cfg, pw, psk, log) -> str:
     _sh("nmcli", "connection", "delete", NAME)
     # secrets are not stored in the profile (flags=2): they come from a 0600 file at dial time, never argv
     data = (f"gateway={cfg['server']}, user={cfg['user']}, ipsec-enabled=yes, password-flags=2, "
             "ipsec-psk-flags=2, refuse-eap=yes, refuse-pap=yes, refuse-chap=yes, refuse-mschap=yes, require-mppe=no")
     r = _sh("nmcli", "connection", "add", "type", "vpn", "con-name", NAME, "vpn-type", "l2tp",
-            "vpn.data", data, "ipv4.never-default", "yes", "ipv6.method", "disabled",
+            "vpn.data", data, "ipv4.never-default", "yes", "ipv4.ignore-auto-dns", "yes", "ipv6.method", "disabled",
             "connection.autoconnect", "no")
     if r.returncode:
         log(f"L2TP: profile not created: {r.stderr.strip()[:300]}")
-        return False
+        return "profile not created (see log)"
     fd, path = tempfile.mkstemp(prefix="gommage-l2tp-")
     try:
         with os.fdopen(fd, "w") as f:  # mkstemp makes it 0600
@@ -221,8 +237,8 @@ def _up_linux(cfg, pw, psk, log) -> bool:
         os.remove(path)
     if r.returncode:
         log(f"L2TP: dial failed: {(r.stderr or r.stdout).strip()[:300]}")
-        return False
-    return True
+        return "dial failed (see log)"
+    return ""
 
 
 def down(log=print):

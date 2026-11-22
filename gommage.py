@@ -176,7 +176,7 @@ import webview
 if WIN:
     import pystray
     from PIL import Image
-VERSION = "1.3.0"  # bump with every release; the app compares it with the latest GitHub release tag
+VERSION = "1.3.1"  # bump with every release; the app compares it with the latest GitHub release tag
 REPO = "shahab7e/Gommage"
 SOCKS = 9050  # defaults; overwritten from settings by apply_ports()
 HTTP = 8118  # HTTPS CONNECT proxy: browsers resolve DNS through Tor (plain SOCKS via WinINET leaks/breaks DNS)
@@ -1023,6 +1023,8 @@ class App:
         self._circ_missing_since = None
         self._ks_tick = 0
         self._l2tp_busy = False
+        self._l2tp_fails = 0
+        self._l2tp_next = 0.0
         self._last_exit_fp = None
         self._last_exit_cid = None
         relink_autostart = migrate_old_name()
@@ -1323,17 +1325,8 @@ class App:
                             continue
                     else:
                         self._clash_fails = 0
-                if self._ks_tick % 15 == 0 and self.s.get("vpn") and self.l2tp_managed() and not self._l2tp_busy:
-                    def _redial():
-                        try:
-                            if not l2tp.connected():
-                                self.log("L2TP: link down, redialing")
-                                if self.l2tp_dial():
-                                    self.apply_split_live()  # new pppN: rebind sing-box
-                        finally:
-                            self._l2tp_busy = False
-                    self._l2tp_busy = True
-                    threading.Thread(target=_redial, daemon=True).start()
+                if self.s.get("vpn"):
+                    self.l2tp_try()
             try:
                 r = control("GETINFO traffic/read traffic/written circuit-status stream-status")
                 cur = (int(re.search(r"traffic/read=(\d+)", r)[1]), int(re.search(r"traffic/written=(\d+)", r)[1]))
@@ -1621,22 +1614,43 @@ class App:
     def l2tp_managed(self):
         return bool((self.s.get("l2tp") or {}).get("enabled"))
 
-    def l2tp_dial(self):
-        """Dial the managed link and point L2TP apps at its interface (Linux: pppN, which can change on redial).
-        True when the interface changed, i.e. sing-box needs a restart to bind to it."""
-        name = l2tp.up(self.s["l2tp"], self.log)
-        if not name or name == self.s["split"].get("l2tp_iface"):
-            return False
-        with self.settings_lock:
-            self.s["split"]["l2tp_iface"] = name
-            self.save_settings()
-        return True
+    def l2tp_try(self, now=False):
+        """Keep the managed link up, in the background so a slow or failing dial never holds up the tunnel.
+        Checks every 15 s; failed dials back off 30 s, 1, 2, 4 ... up to 10 min (a provider may lock an account
+        that redials forever). Points L2TP apps at the link's interface (Linux: pppN, can change on redial)."""
+        if self._l2tp_busy or not self.l2tp_managed() or (not now and time.time() < self._l2tp_next):
+            return
+        self._l2tp_busy = True
+
+        def run_():
+            try:
+                if l2tp.connected():
+                    name, self._l2tp_fails, wait = l2tp.iface(), 0, 15
+                else:
+                    if self._l2tp_fails:
+                        self.log("L2TP: link down, redialing")
+                    name = l2tp.up(self.s["l2tp"], self.log)
+                    self._l2tp_fails = 0 if name else self._l2tp_fails + 1
+                    wait = 15 if name else min(30 * 2 ** (self._l2tp_fails - 1), 600)
+                    if not name:
+                        self.log(f"L2TP: next try in {wait} s")
+                self._l2tp_next = time.time() + wait
+                if name and name != self.s["split"].get("l2tp_iface"):
+                    with self.settings_lock:
+                        self.s["split"]["l2tp_iface"] = name
+                        self.save_settings()
+                    self.apply_split_live()  # sing-box must bind to the new interface
+            finally:
+                self._l2tp_busy = False
+
+        threading.Thread(target=run_, daemon=True).start()
 
     def l2tp_view(self):
         c = self.s.get("l2tp") or {}
         return {"enabled": bool(c.get("enabled")), "server": c.get("server", ""), "user": c.get("user", ""),
                 "has_password": bool(c.get("password")), "has_psk": bool(c.get("psk")),
-                "connected": l2tp.connected(), "missing": l2tp.available(), "windows": WIN}
+                "connected": (up := l2tp.connected()), "missing": l2tp.available(), "windows": WIN,
+                "error": "" if up else l2tp.last_error}
 
     def save_l2tp(self, cfg):
         """Blank password/PSK keep the saved ones. Secrets are never returned to the page."""
@@ -1649,6 +1663,7 @@ class App:
                  "password": l2tp.protect(cfg["password"]) if cfg.get("password") else old.get("password", ""),
                  "psk": l2tp.protect(cfg["psk"]) if cfg.get("psk") else old.get("psk", "")}
             self.s["l2tp"] = c
+            self._l2tp_fails, self._l2tp_next = 0, 0.0
             sp = self.s["split"]
             if c["enabled"]:
                 sp["l2tp_iface"] = l2tp.NAME if WIN else l2tp.iface()  # Linux: known once dialed
@@ -1760,7 +1775,8 @@ class App:
             ks_allow_direct=bool(self.s.get("ks_allow_direct", False)),
         )
         if self.l2tp_managed():
-            self.l2tp_dial()  # before the TUN exists, so IPsec setup can't loop into it
+            self._l2tp_fails = 0
+            self.l2tp_try(now=True)  # background; it routes its server around the TUN before dialing
         else:
             l2tp.ensure_routes(self.s["split"].get("l2tp_iface", ""), self.log)
         sb_path = os.path.join(runtime_dir, "sing-box.json")
@@ -1800,7 +1816,7 @@ class App:
 
     def apply_split_live(self):
         if self.l2tp_managed():
-            self.l2tp_dial()
+            self.l2tp_try(now=True)
         else:
             l2tp.ensure_routes(self.s.get("split", {}).get("l2tp_iface", ""), self.log)
         with self.lock:

@@ -1102,10 +1102,10 @@ function renderL2tp() {
   $("l2tp_server").value = L2.server || ""; $("l2tp_user").value = L2.user || "";
   $("l2tp_pw").placeholder = L2.has_password ? "•••• saved" : "";
   $("l2tp_psk").placeholder = L2.has_psk ? "•••• saved" : "";
-  $("l2tp_status").textContent = L2.missing ? L2.missing : L2.enabled ? (L2.connected ? "Connected · apps set to L2TP use it" : "Will dial on Connect") : "Dials on Connect, redials if it drops";
+  $("l2tp_status").textContent = L2.missing ? L2.missing : L2.enabled ? (L2.connected ? "Connected · apps set to L2TP use it" : L2.error ? "Not connected: " + L2.error : "Will dial on Connect") : "Dials on Connect, redials if it drops";
   $("l2tp_iface_row").style.display = L2.enabled ? "none" : "";
   const sum = $("l2tp_sum");
-  sum.textContent = L2.enabled ? (L2.connected ? "· connected" : "· on") : (SP.l2tp_iface ? "· " + SP.l2tp_iface : "· off");
+  sum.textContent = L2.enabled ? (L2.connected ? "· connected" : L2.error ? "· failed" : "· on") : (SP.l2tp_iface ? "· " + SP.l2tp_iface : "· off");
   sum.classList.toggle("on", !!(L2.enabled || SP.l2tp_iface));
 }
 async function loadL2tp() {
