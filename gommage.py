@@ -176,7 +176,7 @@ import webview
 if WIN:
     import pystray
     from PIL import Image
-VERSION = "1.3.1"  # bump with every release; the app compares it with the latest GitHub release tag
+VERSION = "1.3.2"  # bump with every release; the app compares it with the latest GitHub release tag
 REPO = "shahab7e/Gommage"
 SOCKS = 9050  # defaults; overwritten from settings by apply_ports()
 HTTP = 8118  # HTTPS CONNECT proxy: browsers resolve DNS through Tor (plain SOCKS via WinINET leaks/breaks DNS)
@@ -303,6 +303,42 @@ def popen(cmd, **kw):
 
 def is_admin():
     return ctypes.windll.shell32.IsUserAnAdmin() if WIN else os.geteuid() == 0
+
+
+def has_webview2():
+    import winreg
+    key = r"Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"  # Evergreen WebView2 Runtime
+    for root, path in ((winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\WOW6432Node\{key}"), (winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\{key}"),
+                       (winreg.HKEY_CURRENT_USER, rf"SOFTWARE\{key}")):
+        try:
+            with winreg.OpenKey(root, path) as k:
+                if winreg.QueryValueEx(k, "pv")[0] not in ("", "0.0.0.0"):
+                    return True
+        except OSError:
+            pass
+    return False
+
+
+def ensure_webview2():
+    """Without the WebView2 runtime (stock Windows 10), pywebview silently falls back to IE11 (MSHTML), which draws
+    ui.html as overlapping junk. Install the runtime first; must run before pywebview picks its renderer in start()."""
+    if not WIN or has_webview2():
+        return
+    box = ctypes.windll.user32.MessageBoxW
+    url = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"  # Microsoft's Evergreen bootstrapper (~2 MB)
+    if box(None, "Gommage needs Microsoft Edge WebView2 Runtime to draw its window (Windows 10 doesn't ship it).\n\n"
+                 "Download and install it now? It takes about a minute.", "Gommage", 0x4 | 0x40) != 6:  # Yes/No, info
+        sys.exit(0)
+    try:
+        exe = os.path.join(os.environ.get("TEMP", HOME), "MicrosoftEdgeWebview2Setup.exe")
+        urllib.request.urlretrieve(url, exe)
+        subprocess.run([exe, "/silent", "/install"], timeout=600)  # per-machine when elevated, per-user otherwise
+    except Exception as e:
+        print(f"WebView2 install failed: {e}", file=sys.stderr)
+    if not has_webview2():
+        box(None, "WebView2 could not be installed. Install it by hand from\n"
+                  "https://developer.microsoft.com/microsoft-edge/webview2/\nthen start Gommage again.", "Gommage", 0x10)
+        sys.exit(1)
 
 
 def block_ipv6(on):
@@ -2523,6 +2559,7 @@ if __name__ == "__main__":
     assert not any(o["tag"] == "l2tp" for o in split_engine.build_singbox_config(_l2, {}, ("127.0.0.1", 9050), 9053, [], TOR_PROCS, 19090, "sec", ks_mode="system")["outbounds"])
     if WIN:
         killswitch.self_check_abi()
+        ensure_webview2()
     _nft_s = killswitch.LinuxNftKillSwitch(HOME).build_nft_script("system", tunnel_open=False, allow_lan=False)
     assert "table inet gommage_ks" in _nft_s and "counter drop" in _nft_s and "table inet gommage " not in _nft_s
     apply_ports("0.0.0.0", "9150", "8119")
